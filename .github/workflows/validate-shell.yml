@@ -20,7 +20,7 @@ jobs:
       - name: Extract exec section from YAML
         id: extract
         run: |
-          yq eval '.run.exec' env0.plugin.yaml > /tmp/script.sh
+          yq '.run.exec' env0.plugin.yaml > /tmp/script.sh
           if [ ! -s /tmp/script.sh ]; then
             echo "::error::'run.exec' not found in YAML or is empty"
             exit 1
