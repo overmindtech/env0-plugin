@@ -10,10 +10,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
       - name: Extract exec section from YAML
         id: extract
         run: |
-          yq '.run.exec' env0.plugin.yaml > /tmp/script.sh
+          yq eval -r '.run.exec' env0.plugin.yaml > /tmp/script.sh
           if [ ! -s /tmp/script.sh ]; then
             echo "::error::'run.exec' not found in YAML or is empty"
             exit 1
