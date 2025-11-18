@@ -2,7 +2,7 @@ name: Overmind
 icon: https://avatars.githubusercontent.com/u/93521445
 inputs:
   action:
-    description: "The action to perform. Must be one of: submit-plan, start-change, end-change"
+    description: "The action to perform. Must be one of: submit-plan, start-change, end-change, wait-for-simulation"
     required: true
   api_key:
     description: "Overmind API key for authentication"
@@ -17,6 +17,24 @@ run:
   exec: |
     #!/bin/sh
     set -e
+    
+    TMP_DIR=""
+    GH_TMP_DIR=""
+    MARKDOWN_FILE=""
+    ORIGINAL_DIR=$(pwd)
+    
+    cleanup() {
+        if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
+            rm -rf "${TMP_DIR}"
+        fi
+        if [ -n "${GH_TMP_DIR}" ] && [ -d "${GH_TMP_DIR}" ]; then
+            rm -rf "${GH_TMP_DIR}"
+        fi
+        if [ -n "${MARKDOWN_FILE}" ] && [ -f "${MARKDOWN_FILE}" ]; then
+            rm -f "${MARKDOWN_FILE}"
+        fi
+    }
+    trap cleanup EXIT
     
     # Export API key as environment variable
     export OVM_API_KEY="${inputs.api_key}"
@@ -84,7 +102,6 @@ run:
     
     echo "Downloading ${FILENAME}..."
     TMP_DIR=$(mktemp -d)
-    trap 'rm -rf "$TMP_DIR"' EXIT
     cd "${TMP_DIR}"
     
     curl -fsSL "${DOWNLOAD_URL}" -o archive
@@ -108,6 +125,74 @@ run:
     
     # Verify installation
     "${INSTALL_DIR}/overmind" version 2>/dev/null || echo "Installation complete"
+    cd "${ORIGINAL_DIR}"
+    
+    # Install GitHub CLI
+    GH_REPO="cli/cli"
+    echo "Installing GitHub CLI..."
+    
+    case "${ARCH}" in
+        x86_64) GH_ARCH="amd64" ;;
+        arm64) GH_ARCH="arm64" ;;
+        i386) GH_ARCH="386" ;;
+        *) echo "Unsupported architecture for GitHub CLI: ${ARCH}"; exit 1 ;;
+    esac
+    
+    case "${OS}" in
+        Linux) GH_OS="linux" ;;
+        Darwin) GH_OS="macOS" ;;
+        Windows) GH_OS="windows" ;;
+        *) echo "Unsupported OS for GitHub CLI: ${OS}"; exit 1 ;;
+    esac
+    
+    if [ "${OS}" = "Windows" ]; then
+        GH_ARCHIVE_EXT="zip"
+        GH_BINARY_NAME="gh.exe"
+        GH_INSTALL_PATH="${INSTALL_DIR}/gh.exe"
+    else
+        GH_ARCHIVE_EXT="tar.gz"
+        GH_BINARY_NAME="gh"
+        GH_INSTALL_PATH="${INSTALL_DIR}/gh"
+    fi
+    
+    GH_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "${GH_LATEST_VERSION}" ]; then
+        echo "Failed to fetch latest GitHub CLI version"
+        exit 1
+    fi
+    
+    GH_VERSION_NUMBER=$(echo "${GH_LATEST_VERSION}" | sed 's/^v//')
+    GH_FILENAME="gh_${GH_VERSION_NUMBER}_${GH_OS}_${GH_ARCH}.${GH_ARCHIVE_EXT}"
+    GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${GH_LATEST_VERSION}/${GH_FILENAME}"
+    
+    echo "Downloading ${GH_FILENAME}..."
+    GH_TMP_DIR=$(mktemp -d)
+    cd "${GH_TMP_DIR}"
+    curl -fsSL "${GH_DOWNLOAD_URL}" -o gh-archive
+    
+    if [ "${GH_ARCHIVE_EXT}" = "tar.gz" ]; then
+        tar -xzf gh-archive
+    else
+        unzip -q gh-archive
+    fi
+    
+    GH_EXTRACTED_DIR=$(find . -maxdepth 1 -type d -name "gh_*" | head -n 1)
+    if [ -z "${GH_EXTRACTED_DIR}" ]; then
+        echo "Error: Could not find extracted GitHub CLI directory"
+        exit 1
+    fi
+    
+    GH_BINARY_PATH="${GH_EXTRACTED_DIR}/bin/${GH_BINARY_NAME}"
+    if [ ! -f "${GH_BINARY_PATH}" ]; then
+        echo "Error: GitHub CLI binary not found in archive"
+        exit 1
+    fi
+    
+    cp "${GH_BINARY_PATH}" "${GH_INSTALL_PATH}"
+    chmod +x "${GH_INSTALL_PATH}"
+    echo "✓ GitHub CLI ${GH_LATEST_VERSION} installed to ${GH_INSTALL_PATH}"
+    GH_BINARY="${GH_INSTALL_PATH}"
+    cd "${ORIGINAL_DIR}"
     
     # Construct the env0 deployment URL for the ticket-link
     ticket_link="https://app.env0.com/p/${ENV0_PROJECT_ID}/environments/${ENV0_ENVIRONMENT_ID}/deployments/${ENV0_DEPLOYMENT_LOG_ID}?organizationId=${ENV0_ORGANIZATION_ID}"
@@ -204,8 +289,51 @@ run:
             "${INSTALL_DIR}/overmind" changes end-change \
                 --ticket-link "${ticket_link}"
             ;;
+        wait-for-simulation)
+            echo "Waiting for Overmind simulation and commenting on PR..."
+            if [ -z "${ENV0_PR_NUMBER}" ]; then
+                echo "Error: ENV0_PR_NUMBER environment variable is not set"
+                exit 1
+            fi
+            if [ -z "${ENV0_PR_SOURCE_REPOSITORY}" ]; then
+                echo "Error: ENV0_PR_SOURCE_REPOSITORY environment variable is not set"
+                exit 1
+            fi
+            
+            MARKDOWN_FILE=$(mktemp)
+            set -- "${INSTALL_DIR}/overmind" changes get-change \
+                --ticket-link "${ticket_link}" \
+                --format markdown
+            if [ -n "${inputs.app}" ]; then
+                set -- "$@" --app "${inputs.app}"
+            fi
+            if ! "$@" > "${MARKDOWN_FILE}"; then
+                echo "Error: Failed to retrieve change markdown from Overmind"
+                exit 1
+            fi
+            
+            if [ ! -s "${MARKDOWN_FILE}" ]; then
+                echo "Error: Overmind did not return any markdown content"
+                exit 1
+            fi
+            
+            if [ -z "${GH_BINARY}" ] || [ ! -x "${GH_BINARY}" ]; then
+                echo "Error: GitHub CLI was not installed correctly"
+                exit 1
+            fi
+            
+            if ! "${GH_BINARY}" auth status >/dev/null 2>&1; then
+                echo "Warning: GitHub CLI authentication not detected. Ensure GH_TOKEN is configured."
+            fi
+            
+            echo "Posting simulation results to ${ENV0_PR_SOURCE_REPOSITORY}#${ENV0_PR_NUMBER}..."
+            "${GH_BINARY}" pr comment "${ENV0_PR_NUMBER}" \
+                --repo "${ENV0_PR_SOURCE_REPOSITORY}" \
+                --body-file "${MARKDOWN_FILE}"
+            echo "✓ Simulation results posted to GitHub PR"
+            ;;
         *)
-            echo "Error: Invalid action '${inputs.action}'. Must be one of: submit-plan, start-change, end-change"
+            echo "Error: Invalid action '${inputs.action}'. Must be one of: submit-plan, start-change, end-change, wait-for-simulation"
             exit 1
             ;;
     esac
