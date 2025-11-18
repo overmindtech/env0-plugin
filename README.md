@@ -17,6 +17,7 @@ The Overmind plugin installs the Overmind CLI (and GitHub CLI) and executes one 
 | `action` | The action to perform. Must be one of: `submit-plan`, `start-change`, `end-change`, `wait-for-simulation` | Yes |
 | `api_key` | Overmind API key for authentication. Must have the following scopes: `account:read`, `changes:write`, `config:write`, `request:receive`, `sources:read`, `source:write` | Yes |
 | `tags` | A comma-separated list of key=value tags to attach to the change (only used with `submit-plan` action) | No |
+| `post_comment` | Whether `wait-for-simulation` should post the Overmind markdown to GitHub. Defaults to `true` when running against a PR, otherwise `false`. | No |
 
 ## Usage
 
@@ -89,7 +90,7 @@ deploy:
 
 ### Wait for Simulation (any step after Overmind run)
 
-Fetch the latest Overmind simulation summary for the current env0 deployment and comment on the matching GitHub pull request. Requires `ENV0_PR_NUMBER`, `ENV0_PR_SOURCE_REPOSITORY`, and valid GitHub CLI credentials (for example `GH_TOKEN`).
+Fetch the latest Overmind simulation summary for the current env0 deployment and (optionally) comment on the matching GitHub pull request. By default the plugin posts to GitHub whenever the deployment runs in the context of a PR; set `post_comment: false` to skip commenting. When posting, make sure `GH_TOKEN` is set.
 
 ```yaml
 version: 2
@@ -102,6 +103,7 @@ deploy:
           inputs:
             action: wait-for-simulation
             api_key: ${OVERMIND_API_KEY}
+            post_comment: false   # optional override
 ```
 
 ### Complete Example
@@ -145,7 +147,7 @@ deploy:
    - `submit-plan`: Uses `$ENV0_TF_PLAN_JSON` to submit the Terraform plan
    - `start-change`: Marks the beginning of a change with a ticket link to the env0 deployment
    - `end-change`: Marks the completion of a change with a ticket link to the env0 deployment
-   - `wait-for-simulation`: Retrieves Overmind simulation results as Markdown and posts them to the GitHub PR
+   - `wait-for-simulation`: Retrieves Overmind simulation results as Markdown and (when `post_comment=true`) posts them to the GitHub PR
 
 4. **Ticket Links**: All actions automatically construct a ticket link to the env0 deployment using environment variables (`ENV0_PROJECT_ID`, `ENV0_ENVIRONMENT_ID`, `ENV0_DEPLOYMENT_LOG_ID`, `ENV0_ORGANIZATION_ID`).
 
@@ -157,7 +159,7 @@ deploy:
   - `ENV0_DEPLOYMENT_LOG_ID`
   - `ENV0_ORGANIZATION_ID`
   - `ENV0_TF_PLAN_JSON` (for submit-plan action)
-  - `ENV0_PR_NUMBER` and `ENV0_PR_SOURCE_REPOSITORY` (for wait-for-simulation action)
+  - `ENV0_PR_NUMBER` (only when `wait-for-simulation` posts to GitHub, i.e., running against a PR)
 
 - A valid Overmind API key with the following required scopes:
   - `account:read`
@@ -167,7 +169,7 @@ deploy:
   - `sources:read`
   - `source:write`
 
-- GitHub authentication for the CLI when using `wait-for-simulation` (e.g., `GH_TOKEN` or `gh auth login`).
+- GitHub authentication for the CLI when `wait-for-simulation` posts to GitHub (set `GH_TOKEN`).
 
 ## Notes
 

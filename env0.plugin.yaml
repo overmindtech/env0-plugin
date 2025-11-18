@@ -13,6 +13,9 @@ inputs:
   app:
     description: "The Overmind instance to connect to (defaults to https://app.overmind.tech)"
     required: false
+  post_comment:
+    description: "Whether wait-for-simulation should post the Overmind markdown to the PR. Defaults to true when ENV0_PR_NUMBER is set, otherwise false."
+    required: false
 run:
   exec: |
     #!/bin/sh
@@ -291,13 +294,22 @@ run:
             ;;
         wait-for-simulation)
             echo "Waiting for Overmind simulation and commenting on PR..."
-            if [ -z "${ENV0_PR_NUMBER}" ]; then
-                echo "Error: ENV0_PR_NUMBER environment variable is not set"
-                exit 1
-            fi
-            if [ -z "${ENV0_PR_SOURCE_REPOSITORY}" ]; then
-                echo "Error: ENV0_PR_SOURCE_REPOSITORY environment variable is not set"
-                exit 1
+            should_post_comment="${inputs.post_comment}"
+            if [ -n "${should_post_comment}" ]; then
+                should_post_comment=$(echo "${should_post_comment}" | tr '[:upper:]' '[:lower:]')
+                case "${should_post_comment}" in
+                    true|false) ;;
+                    *)
+                        echo "Error: post_comment must be 'true' or 'false'"
+                        exit 1
+                        ;;
+                esac
+            else
+                if [ -n "${ENV0_PR_NUMBER}" ]; then
+                    should_post_comment="true"
+                else
+                    should_post_comment="false"
+                fi
             fi
             
             MARKDOWN_FILE=$(mktemp)
@@ -317,20 +329,36 @@ run:
                 exit 1
             fi
             
-            if [ -z "${GH_BINARY}" ] || [ ! -x "${GH_BINARY}" ]; then
-                echo "Error: GitHub CLI was not installed correctly"
-                exit 1
+            if [ "${should_post_comment}" = "true" ]; then
+                if [ -z "${ENV0_PR_NUMBER}" ]; then
+                    echo "Error: ENV0_PR_NUMBER environment variable is not set but post_comment=true"
+                    exit 1
+                fi
+                if [ -z "${ENV0_PR_SOURCE_REPOSITORY}" ]; then
+                    echo "Error: ENV0_PR_SOURCE_REPOSITORY environment variable is not set but post_comment=true"
+                    exit 1
+                fi
+                if [ -z "${GH_BINARY}" ] || [ ! -x "${GH_BINARY}" ]; then
+                    echo "Error: GitHub CLI was not installed correctly"
+                    exit 1
+                fi
+                
+                if ! "${GH_BINARY}" auth status >/dev/null 2>&1; then
+                    echo "Warning: GitHub CLI authentication not detected. Ensure GH_TOKEN is configured."
+                fi
+                
+                echo "Posting simulation results to ${ENV0_PR_SOURCE_REPOSITORY}#${ENV0_PR_NUMBER}..."
+                "${GH_BINARY}" pr comment "${ENV0_PR_NUMBER}" \
+                    --repo "${ENV0_PR_SOURCE_REPOSITORY}" \
+                    --body-file "${MARKDOWN_FILE}"
+                echo "✓ Simulation results posted to GitHub PR"
+            else
+                if [ -n "${ENV0_PR_NUMBER}" ]; then
+                    echo "Skipping GitHub comment because post_comment=false."
+                else
+                    echo "Skipping GitHub comment because ENV0_PR_NUMBER is not set."
+                fi
             fi
-            
-            if ! "${GH_BINARY}" auth status >/dev/null 2>&1; then
-                echo "Warning: GitHub CLI authentication not detected. Ensure GH_TOKEN is configured."
-            fi
-            
-            echo "Posting simulation results to ${ENV0_PR_SOURCE_REPOSITORY}#${ENV0_PR_NUMBER}..."
-            "${GH_BINARY}" pr comment "${ENV0_PR_NUMBER}" \
-                --repo "${ENV0_PR_SOURCE_REPOSITORY}" \
-                --body-file "${MARKDOWN_FILE}"
-            echo "✓ Simulation results posted to GitHub PR"
             ;;
         *)
             echo "Error: Invalid action '${inputs.action}'. Must be one of: submit-plan, start-change, end-change, wait-for-simulation"
