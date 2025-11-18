@@ -16,7 +16,7 @@ run:
     set -e
     
     # Export API key as environment variable
-    export OVM_API_KEY="${api_key}"
+    export OVM_API_KEY="${inputs.api_key}"
     
     # Install Overmind CLI
     REPO="overmindtech/cli"
@@ -110,19 +110,19 @@ run:
     ticket_link="https://app.env0.com/p/${ENV0_PROJECT_ID}/environments/${ENV0_ENVIRONMENT_ID}/deployments/${ENV0_DEPLOYMENT_LOG_ID}?organizationId=${ENV0_ORGANIZATION_ID}"
     
     # Execute the appropriate action based on input
-    case "${action}" in
+    case "${inputs.action}" in
         submit-plan)
             if [ -z "${ENV0_TF_PLAN_JSON}" ]; then
                 echo "Error: ENV0_TF_PLAN_JSON environment variable is not set"
                 exit 1
             fi
             echo "Submitting plan to Overmind..."
-            if [ -n "${tags}" ]; then
+            if [ -n "${inputs.tags}" ]; then
                 "${INSTALL_DIR}/overmind" changes submit-plan \
                     "${ENV0_TF_PLAN_JSON}" \
                     --title "Env0 Deployment: ${ENV0_DEPLOYMENT_LOG_ID}" \
                     --ticket-link "${ticket_link}" \
-                    --tags "${tags}"
+                    --tags "${inputs.tags}"
             else
                 "${INSTALL_DIR}/overmind" changes submit-plan \
                     "${ENV0_TF_PLAN_JSON}" \
@@ -141,7 +141,7 @@ run:
                 --ticket-link "${ticket_link}"
             ;;
         *)
-            echo "Error: Invalid action '${action}'. Must be one of: submit-plan, start-change, end-change"
+            echo "Error: Invalid action '${inputs.action}'. Must be one of: submit-plan, start-change, end-change"
             exit 1
             ;;
     esac
