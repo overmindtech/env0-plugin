@@ -84,7 +84,7 @@ run:
     
     echo "Downloading ${FILENAME}..."
     TMP_DIR=$(mktemp -d)
-    trap "rm -rf ${TMP_DIR}" EXIT
+    trap 'rm -rf "$TMP_DIR"' EXIT
     cd "${TMP_DIR}"
     
     curl -fsSL "${DOWNLOAD_URL}" -o archive
