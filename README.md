@@ -171,6 +171,14 @@ deploy:
 
 - GitHub authentication for the CLI when `wait-for-simulation` posts to GitHub (set `GH_TOKEN`).
 
+### Creating a `GH_TOKEN`
+
+`wait-for-simulation` calls `gh pr comment`, which requires a GitHub personal access token. To create one:
+
+1. Sign in to GitHub and open https://github.com/settings/tokens/new (or the fine-grained token wizard).
+2. Choose **Classic** token, set an expiry that matches your security policy, and select the **repo** scope (read/write is needed to comment on PRs).
+3. Generate the token and copy it immediately—GitHub will not show it again.
+4. Store the token securely in env0 (for example as an environment variable or secret) and expose it to the plugin as `GH_TOKEN`.
 ## Notes
 
 - The plugin automatically detects the operating system and architecture to download the correct Overmind CLI binary.
