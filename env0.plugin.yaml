@@ -10,6 +10,9 @@ inputs:
   tags:
     description: A comma-separated list of key=value tags to attach to the change (only used with submit-plan action)
     required: false
+  app:
+    description: The Overmind instance to connect to (defaults to https://app.overmind.tech)
+    required: false
 run:
   exec: |
     #!/bin/sh
@@ -109,6 +112,18 @@ run:
     # Construct the env0 deployment URL for the ticket-link
     ticket_link="https://app.env0.com/p/${ENV0_PROJECT_ID}/environments/${ENV0_ENVIRONMENT_ID}/deployments/${ENV0_DEPLOYMENT_LOG_ID}?organizationId=${ENV0_ORGANIZATION_ID}"
     
+    # Build description from env0 deployment info
+    description="Env0 Deployment: ${ENV0_PROJECT_NAME} - ${ENV0_ENVIRONMENT_NAME} (${ENV0_DEPLOYMENT_TYPE})"
+    if [ -n "${ENV0_DEPLOYER_NAME}" ]; then
+        description="${description} by ${ENV0_DEPLOYER_NAME}"
+    fi
+    
+    # Build title from env0 deployment info
+    title="${ENV0_PROJECT_NAME} - ${ENV0_ENVIRONMENT_NAME}"
+    if [ -n "${ENV0_TEMPLATE_NAME}" ]; then
+        title="${ENV0_TEMPLATE_NAME} (${ENV0_ENVIRONMENT_NAME})"
+    fi
+    
     # Execute the appropriate action based on input
     case "${inputs.action}" in
         submit-plan)
@@ -117,17 +132,53 @@ run:
                 exit 1
             fi
             echo "Submitting plan to Overmind..."
-            if [ -n "${inputs.tags}" ]; then
-                "${INSTALL_DIR}/overmind" changes submit-plan \
-                    "${ENV0_TF_PLAN_JSON}" \
-                    --title "Env0 Deployment: ${ENV0_DEPLOYMENT_LOG_ID}" \
-                    --ticket-link "${ticket_link}" \
-                    --tags "${inputs.tags}"
-            else
-                "${INSTALL_DIR}/overmind" changes submit-plan \
-                    "${ENV0_TF_PLAN_JSON}" \
-                    --title "Env0 Deployment: ${ENV0_DEPLOYMENT_LOG_ID}" \
-                    --ticket-link "${ticket_link}"
+            
+            # Generate code changes diff if in a git repository
+            DIFF_FILE=""
+            if [ -d "${ENV0_TEMPLATE_DIR}/.git" ] && [ -n "${ENV0_TEMPLATE_REVISION}" ]; then
+                cd "${ENV0_TEMPLATE_DIR}"
+                if git rev-parse HEAD~1 >/dev/null 2>&1; then
+                    DIFF_FILE=$(mktemp)
+                    git diff HEAD~1 HEAD > "${DIFF_FILE}" 2>/dev/null || true
+                    if [ ! -s "${DIFF_FILE}" ]; then
+                        rm -f "${DIFF_FILE}"
+                        DIFF_FILE=""
+                    fi
+                fi
+            fi
+            
+            # Find terraform plan output file if it exists
+            PLAN_OUTPUT=""
+            if [ -f "${ENV0_TEMPLATE_DIR}/.tf-plan-output" ]; then
+                PLAN_OUTPUT="${ENV0_TEMPLATE_DIR}/.tf-plan-output"
+            elif [ -f "${ENV0_ROOT_DIR}/.tf-plan-output" ]; then
+                PLAN_OUTPUT="${ENV0_ROOT_DIR}/.tf-plan-output"
+            fi
+            
+            # Determine owner (prefer name over email)
+            OWNER=""
+            if [ -n "${ENV0_DEPLOYER_NAME}" ]; then
+                OWNER="${ENV0_DEPLOYER_NAME}"
+            elif [ -n "${ENV0_DEPLOYER_EMAIL}" ]; then
+                OWNER="${ENV0_DEPLOYER_EMAIL}"
+            fi
+            
+            # Build submit-plan command with all available information
+            "${INSTALL_DIR}/overmind" changes submit-plan \
+                "${ENV0_TF_PLAN_JSON}" \
+                --title "${title}" \
+                --description "${description}" \
+                --ticket-link "${ticket_link}" \
+                ${inputs.app:+--app "${inputs.app}"} \
+                ${ENV0_TEMPLATE_REPOSITORY:+--repo "${ENV0_TEMPLATE_REPOSITORY}"} \
+                ${OWNER:+--owner "${OWNER}"} \
+                ${inputs.tags:+--tags "${inputs.tags}"} \
+                ${PLAN_OUTPUT:+--terraform-plan-output "${PLAN_OUTPUT}"} \
+                ${DIFF_FILE:+--code-changes-diff "${DIFF_FILE}"}
+            
+            # Clean up diff file if created
+            if [ -n "${DIFF_FILE}" ] && [ -f "${DIFF_FILE}" ]; then
+                rm -f "${DIFF_FILE}"
             fi
             ;;
         start-change)
