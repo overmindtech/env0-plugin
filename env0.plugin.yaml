@@ -1,0 +1,148 @@
+name: Overmind
+icon: https://avatars.githubusercontent.com/u/93521445
+inputs:
+  action:
+    description: The action to perform. Must be one of: submit-plan, start-change, end-change
+    required: true
+  api_key:
+    description: Overmind API key for authentication
+    required: true
+  tags:
+    description: A comma-separated list of key=value tags to attach to the change (only used with submit-plan action)
+    required: false
+run:
+  exec: |
+    #!/bin/sh
+    set -e
+    
+    # Export API key as environment variable
+    export OVM_API_KEY="${api_key}"
+    
+    # Install Overmind CLI
+    REPO="overmindtech/cli"
+    OS=$(uname -s)
+    ARCH=$(uname -m)
+    
+    case "${ARCH}" in
+        x86_64) ARCH="x86_64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        i386|i686) ARCH="i386" ;;
+        *) echo "Unsupported architecture: ${ARCH}"; exit 1 ;;
+    esac
+    
+    case "${OS}" in
+        Linux|Darwin) ARCHIVE_EXT="tar.gz" ;;
+        MINGW*|MSYS*|CYGWIN*) OS="Windows"; ARCHIVE_EXT="zip" ;;
+        *) echo "Unsupported OS: ${OS}"; exit 1 ;;
+    esac
+    
+    # Function to find a writable directory in PATH
+    find_install_dir() {
+        IFS=':'
+        for dir in $PATH; do
+            [ -z "$dir" ] && continue
+            
+            # Create directory if it doesn't exist (if parent is writable)
+            if [ ! -d "$dir" ]; then
+                mkdir -p "$dir" 2>/dev/null || continue
+            fi
+            
+            # Check if directory is writable
+            if [ -w "$dir" ]; then
+                echo "$dir"
+                unset IFS
+                return 0
+            fi
+        done
+        unset IFS
+        return 1
+    }
+    
+    INSTALL_DIR=$(find_install_dir)
+    if [ -z "${INSTALL_DIR}" ]; then
+        echo "Error: No writable directory found in PATH"
+        echo "Current PATH: ${PATH}"
+        exit 1
+    fi
+    
+    echo "Installing to: ${INSTALL_DIR}"
+    echo "Detecting latest release..."
+    
+    LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "${LATEST_VERSION}" ]; then
+        echo "Failed to fetch latest version"
+        exit 1
+    fi
+    
+    echo "Latest version: ${LATEST_VERSION}"
+    VERSION_NUMBER=$(echo "${LATEST_VERSION}" | sed 's/^v//')
+    FILENAME="overmind_cli_${VERSION_NUMBER}_${OS}_${ARCH}.${ARCHIVE_EXT}"
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_VERSION}/${FILENAME}"
+    
+    echo "Downloading ${FILENAME}..."
+    TMP_DIR=$(mktemp -d)
+    trap "rm -rf ${TMP_DIR}" EXIT
+    cd "${TMP_DIR}"
+    
+    curl -fsSL "${DOWNLOAD_URL}" -o archive
+    
+    if [ "${ARCHIVE_EXT}" = "tar.gz" ]; then
+        tar -xzf archive
+    else
+        unzip -q archive
+    fi
+    
+    BINARY=$(find . -maxdepth 1 -type f -executable -name "overmind*" ! -name "*.txt" ! -name "*.md" ! -name "LICENSE" | head -n 1)
+    if [ -z "${BINARY}" ]; then
+        echo "Error: Could not find binary in archive"
+        ls -la
+        exit 1
+    fi
+    
+    cp "${BINARY}" "${INSTALL_DIR}/overmind"
+    chmod +x "${INSTALL_DIR}/overmind"
+    echo "✓ Overmind CLI ${LATEST_VERSION} installed to ${INSTALL_DIR}/overmind"
+    
+    # Verify installation
+    "${INSTALL_DIR}/overmind" version 2>/dev/null || echo "Installation complete"
+    
+    # Construct the env0 deployment URL for the ticket-link
+    ticket_link="https://app.env0.com/p/${ENV0_PROJECT_ID}/environments/${ENV0_ENVIRONMENT_ID}/deployments/${ENV0_DEPLOYMENT_LOG_ID}?organizationId=${ENV0_ORGANIZATION_ID}"
+    
+    # Execute the appropriate action based on input
+    case "${action}" in
+        submit-plan)
+            if [ -z "${ENV0_TF_PLAN_JSON}" ]; then
+                echo "Error: ENV0_TF_PLAN_JSON environment variable is not set"
+                exit 1
+            fi
+            echo "Submitting plan to Overmind..."
+            if [ -n "${tags}" ]; then
+                "${INSTALL_DIR}/overmind" changes submit-plan \
+                    "${ENV0_TF_PLAN_JSON}" \
+                    --title "Env0 Deployment: ${ENV0_DEPLOYMENT_LOG_ID}" \
+                    --ticket-link "${ticket_link}" \
+                    --tags "${tags}"
+            else
+                "${INSTALL_DIR}/overmind" changes submit-plan \
+                    "${ENV0_TF_PLAN_JSON}" \
+                    --title "Env0 Deployment: ${ENV0_DEPLOYMENT_LOG_ID}" \
+                    --ticket-link "${ticket_link}"
+            fi
+            ;;
+        start-change)
+            echo "Starting change in Overmind..."
+            "${INSTALL_DIR}/overmind" changes start-change \
+                --ticket-link "${ticket_link}"
+            ;;
+        end-change)
+            echo "Ending change in Overmind..."
+            "${INSTALL_DIR}/overmind" changes end-change \
+                --ticket-link "${ticket_link}"
+            ;;
+        *)
+            echo "Error: Invalid action '${action}'. Must be one of: submit-plan, start-change, end-change"
+            exit 1
+            ;;
+    esac
+
