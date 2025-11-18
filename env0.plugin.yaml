@@ -2,16 +2,16 @@ name: Overmind
 icon: https://avatars.githubusercontent.com/u/93521445
 inputs:
   action:
-    description: The action to perform. Must be one of: submit-plan, start-change, end-change
+    description: "The action to perform. Must be one of: submit-plan, start-change, end-change"
     required: true
   api_key:
-    description: Overmind API key for authentication
+    description: "Overmind API key for authentication"
     required: true
   tags:
-    description: A comma-separated list of key=value tags to attach to the change (only used with submit-plan action)
+    description: "A comma-separated list of key=value tags to attach to the change (only used with submit-plan action)"
     required: false
   app:
-    description: The Overmind instance to connect to (defaults to https://app.overmind.tech)
+    description: "The Overmind instance to connect to (defaults to https://app.overmind.tech)"
     required: false
 run:
   exec: |
