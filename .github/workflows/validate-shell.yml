@@ -1,0 +1,52 @@
+name: Validate Shell Syntax
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'env0.plugin.yaml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'env0.plugin.yaml'
+
+jobs:
+  validate-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract exec section from YAML
+        id: extract
+        run: |
+          yq eval '.run.exec' env0.plugin.yaml > /tmp/script.sh
+          if [ ! -s /tmp/script.sh ]; then
+            echo "::error::'run.exec' not found in YAML or is empty"
+            exit 1
+          fi
+          echo "✓ Script extracted successfully"
+          echo "script_path=/tmp/script.sh" >> $GITHUB_OUTPUT
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Validate shell syntax with shellcheck
+        run: |
+          echo "Validating shell syntax..."
+          shellcheck -x /tmp/script.sh || {
+            echo "::error::Shell syntax validation failed"
+            exit 1
+          }
+          echo "✓ Shell syntax is valid"
+
+      - name: Display extracted script (for debugging)
+        if: failure()
+        run: |
+          echo "Extracted script content:"
+          echo "---"
+          cat /tmp/script.sh
+          echo "---"
+

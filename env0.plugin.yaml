@@ -164,17 +164,30 @@ run:
             fi
             
             # Build submit-plan command with all available information
-            "${INSTALL_DIR}/overmind" changes submit-plan \
+            set -- "${INSTALL_DIR}/overmind" changes submit-plan \
                 "${ENV0_TF_PLAN_JSON}" \
                 --title "${title}" \
                 --description "${description}" \
-                --ticket-link "${ticket_link}" \
-                ${inputs.app:+--app "${inputs.app}"} \
-                ${ENV0_TEMPLATE_REPOSITORY:+--repo "${ENV0_TEMPLATE_REPOSITORY}"} \
-                ${OWNER:+--owner "${OWNER}"} \
-                ${inputs.tags:+--tags "${inputs.tags}"} \
-                ${PLAN_OUTPUT:+--terraform-plan-output "${PLAN_OUTPUT}"} \
-                ${DIFF_FILE:+--code-changes-diff "${DIFF_FILE}"}
+                --ticket-link "${ticket_link}"
+            if [ -n "${inputs.app}" ]; then
+                set -- "$@" --app "${inputs.app}"
+            fi
+            if [ -n "${ENV0_TEMPLATE_REPOSITORY}" ]; then
+                set -- "$@" --repo "${ENV0_TEMPLATE_REPOSITORY}"
+            fi
+            if [ -n "${OWNER}" ]; then
+                set -- "$@" --owner "${OWNER}"
+            fi
+            if [ -n "${inputs.tags}" ]; then
+                set -- "$@" --tags "${inputs.tags}"
+            fi
+            if [ -n "${PLAN_OUTPUT}" ]; then
+                set -- "$@" --terraform-plan-output "${PLAN_OUTPUT}"
+            fi
+            if [ -n "${DIFF_FILE}" ]; then
+                set -- "$@" --code-changes-diff "${DIFF_FILE}"
+            fi
+            "$@"
             
             # Clean up diff file if created
             if [ -n "${DIFF_FILE}" ] && [ -f "${DIFF_FILE}" ]; then
