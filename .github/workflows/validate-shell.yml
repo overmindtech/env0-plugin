@@ -2,13 +2,6 @@ name: Validate Shell Syntax
 
 on:
   push:
-    branches: [ main ]
-    paths:
-      - 'env0.plugin.yaml'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'env0.plugin.yaml'
 
 jobs:
   validate-shell:
