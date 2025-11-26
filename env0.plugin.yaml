@@ -90,18 +90,10 @@ run:
     fi
     
     echo "Installing to: ${INSTALL_DIR}"
-    echo "Detecting latest release..."
+    echo "Downloading latest Overmind release..."
     
-    LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    if [ -z "${LATEST_VERSION}" ]; then
-        echo "Failed to fetch latest version"
-        exit 1
-    fi
-    
-    echo "Latest version: ${LATEST_VERSION}"
-    VERSION_NUMBER=$(echo "${LATEST_VERSION}" | sed 's/^v//')
-    FILENAME="overmind_cli_${VERSION_NUMBER}_${OS}_${ARCH}.${ARCHIVE_EXT}"
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_VERSION}/${FILENAME}"
+    FILENAME="overmind_cli_${OS}_${ARCH}.${ARCHIVE_EXT}"
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${FILENAME}"
     
     echo "Downloading ${FILENAME}..."
     TMP_DIR=$(mktemp -d)
@@ -115,7 +107,17 @@ run:
         unzip -q archive
     fi
     
-    BINARY=$(find . -maxdepth 1 -type f -executable -name "overmind*" ! -name "*.txt" ! -name "*.md" ! -name "LICENSE" | head -n 1)
+    if [ "${OS}" = "Windows" ]; then
+        EXPECTED_BINARY="overmind.exe"
+    else
+        EXPECTED_BINARY="overmind"
+    fi
+    
+    if [ -f "${EXPECTED_BINARY}" ]; then
+        BINARY="./${EXPECTED_BINARY}"
+    else
+        BINARY=$(find . -maxdepth 2 -type f -executable -name "overmind*" ! -name "*.txt" ! -name "*.md" ! -name "LICENSE" | head -n 1)
+    fi
     if [ -z "${BINARY}" ]; then
         echo "Error: Could not find binary in archive"
         ls -la
@@ -124,7 +126,7 @@ run:
     
     cp "${BINARY}" "${INSTALL_DIR}/overmind"
     chmod +x "${INSTALL_DIR}/overmind"
-    echo "✓ Overmind CLI ${LATEST_VERSION} installed to ${INSTALL_DIR}/overmind"
+    echo "✓ Overmind CLI installed to ${INSTALL_DIR}/overmind"
     
     # Verify installation
     "${INSTALL_DIR}/overmind" version 2>/dev/null || echo "Installation complete"
