@@ -387,17 +387,9 @@ run:
                     
                     echo "Posting simulation results to GitLab MR ${PROJECT_PATH}!${MR_IID}..."
                     
-                    # Create JSON payload file for safer handling
+                    # Create JSON payload file using jq
                     JSON_PAYLOAD_FILE=$(mktemp)
-                    # Use jq if available, otherwise use a simple approach
-                    if command -v jq >/dev/null 2>&1; then
-                        jq -n --rawfile body "${MARKDOWN_FILE}" '{body: $body}' > "${JSON_PAYLOAD_FILE}"
-                    else
-                        # Fallback: manually construct JSON
-                        # Read file, escape backslashes first, then quotes, then convert newlines
-                        ESCAPED_CONTENT=$(sed 's/\\/\\\\/g' < "${MARKDOWN_FILE}" | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
-                        echo "{\"body\":\"${ESCAPED_CONTENT}\"}" > "${JSON_PAYLOAD_FILE}"
-                    fi
+                    jq -n --rawfile body "${MARKDOWN_FILE}" '{body: $body}' > "${JSON_PAYLOAD_FILE}"
                     
                     # Post comment using curl
                     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
