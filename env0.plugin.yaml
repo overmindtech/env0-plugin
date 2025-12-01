@@ -395,7 +395,7 @@ run:
                     else
                         # Fallback: manually construct JSON
                         # Read file, escape backslashes first, then quotes, then convert newlines
-                        ESCAPED_CONTENT=$(cat "${MARKDOWN_FILE}" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
+                        ESCAPED_CONTENT=$(sed 's/\\/\\\\/g' < "${MARKDOWN_FILE}" | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
                         echo "{\"body\":\"${ESCAPED_CONTENT}\"}" > "${JSON_PAYLOAD_FILE}"
                     fi
                     
