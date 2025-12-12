@@ -17,7 +17,8 @@ The Overmind plugin installs the Overmind CLI (and GitHub CLI) and executes one 
 | `action` | The action to perform. Must be one of: `submit-plan`, `start-change`, `end-change`, `wait-for-simulation` | Yes |
 | `api_key` | Overmind API key for authentication. Must have the following scopes: `account:read`, `changes:write`, `config:write`, `request:receive`, `sources:read`, `source:write` | Yes |
 | `tags` | A comma-separated list of key=value tags to attach to the change (only used with `submit-plan` action) | No |
-| `post_comment` | Whether `wait-for-simulation` should post the Overmind markdown to GitHub PR or GitLab MR. Defaults to `true` when running against a PR/MR, otherwise `false`. Automatically detects GitHub or GitLab based on repository URL. | No |
+| `post_comment` | Whether `wait-for-simulation` should post the Overmind markdown to GitHub PR or GitLab MR. Defaults to `true` when running against a PR/MR, otherwise `false`. When `true`, `comment_provider` must be set. | No |
+| `comment_provider` | Where `wait-for-simulation` should post comments when `post_comment=true`. Must be one of: `github`, `gitlab`. | No |
 
 ## Usage
 
@@ -90,7 +91,7 @@ deploy:
 
 ### Wait for Simulation (any step after Overmind run)
 
-Fetch the latest Overmind simulation summary for the current env0 deployment and (optionally) comment on the matching GitHub pull request or GitLab merge request. By default the plugin posts comments whenever the deployment runs in the context of a PR/MR; set `post_comment: false` to skip commenting. The plugin automatically detects whether the repository is GitHub or GitLab based on the repository URL. When posting to GitHub, make sure `GH_TOKEN` is set. When posting to GitLab, make sure `GITLAB_TOKEN` is set.
+Fetch the latest Overmind simulation summary for the current env0 deployment and (optionally) comment on the matching GitHub pull request or GitLab merge request. By default the plugin posts comments whenever the deployment runs in the context of a PR/MR; set `post_comment: false` to skip commenting. When `post_comment=true`, you must set `comment_provider` to `github` or `gitlab`. When posting to GitHub, make sure `GH_TOKEN` is set. When posting to GitLab, make sure `GITLAB_TOKEN` is set.
 
 ```yaml
 version: 2
@@ -104,6 +105,38 @@ deploy:
             action: wait-for-simulation
             api_key: ${OVERMIND_API_KEY}
             post_comment: false   # optional override
+```
+
+If you want to post a comment, set `comment_provider` explicitly:
+
+```yaml
+version: 2
+deploy:
+  steps:
+    terraformApply:
+      after:
+        - name: Post Overmind Simulation (GitHub)
+          use: https://github.com/your-org/env0-plugin
+          inputs:
+            action: wait-for-simulation
+            api_key: ${OVERMIND_API_KEY}
+            post_comment: true
+            comment_provider: github
+```
+
+```yaml
+version: 2
+deploy:
+  steps:
+    terraformApply:
+      after:
+        - name: Post Overmind Simulation (GitLab)
+          use: https://github.com/your-org/env0-plugin
+          inputs:
+            action: wait-for-simulation
+            api_key: ${OVERMIND_API_KEY}
+            post_comment: true
+            comment_provider: gitlab
 ```
 
 ### Complete Example
@@ -192,7 +225,7 @@ deploy:
 4. Generate the token and copy it immediately—GitLab will not show it again.
 5. Store the token securely in env0 (for example as an environment variable or secret) and expose it to the plugin as `GITLAB_TOKEN`.
 
-**Note**: The plugin automatically detects whether a repository is GitHub or GitLab based on the `ENV0_PR_SOURCE_REPOSITORY` environment variable. If the repository URL contains "gitlab", it will use GitLab API; otherwise, it will use GitHub CLI.
+**Note**: When `post_comment=true`, you must set `comment_provider` to `github` or `gitlab`.
 ## Notes
 
 - The plugin automatically detects the operating system and architecture to download the correct Overmind CLI binary.

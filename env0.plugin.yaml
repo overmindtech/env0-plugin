@@ -14,7 +14,10 @@ inputs:
     description: "The Overmind instance to connect to (defaults to https://app.overmind.tech)"
     required: false
   post_comment:
-    description: "Whether wait-for-simulation should post the Overmind markdown to the PR/MR. Defaults to true when ENV0_PR_NUMBER is set, otherwise false. Automatically detects GitHub or GitLab based on repository URL."
+    description: "Whether wait-for-simulation should post the Overmind markdown to the PR/MR. Defaults to true when ENV0_PR_NUMBER is set, otherwise false. When true, comment_provider must be set."
+    required: false
+  comment_provider:
+    description: "Where to post PR/MR comments when wait-for-simulation runs with post_comment=true. Must be one of: github, gitlab."
     required: false
 run:
   exec: |
@@ -344,86 +347,98 @@ run:
                     echo "Error: ENV0_PR_SOURCE_REPOSITORY environment variable is not set but post_comment=true"
                     exit 1
                 fi
-                
-                # Detect if this is a GitLab repository
-                if echo "${ENV0_PR_SOURCE_REPOSITORY}" | grep -q "gitlab"; then
-                    # GitLab merge request
-                    if [ -z "${GITLAB_TOKEN}" ]; then
-                        echo "Error: GITLAB_TOKEN environment variable is not set but repository appears to be GitLab"
-                        exit 1
-                    fi
-                    
-                    # Extract GitLab base URL and project path from repository string
-                    # ENV0_PR_SOURCE_REPOSITORY format: "group/project" or "https://gitlab.com/group/project" or "gitlab.com/group/project"
-                    REPO_STR="${ENV0_PR_SOURCE_REPOSITORY}"
-                    
-                    # Remove protocol if present
-                    REPO_STR=$(echo "${REPO_STR}" | sed 's|^https\?://||')
-                    
-                    # Extract host (default to gitlab.com if not specified)
-                    if echo "${REPO_STR}" | grep -q "/"; then
-                        GITLAB_HOST=$(echo "${REPO_STR}" | cut -d'/' -f1)
-                        PROJECT_PATH=$(echo "${REPO_STR}" | cut -d'/' -f2-)
-                    else
-                        # If no host, assume gitlab.com
-                        GITLAB_HOST="gitlab.com"
-                        PROJECT_PATH="${REPO_STR}"
-                    fi
-                    
-                    # Ensure we have https:// prefix for API calls
-                    if [ "${GITLAB_HOST}" != "gitlab.com" ] && ! echo "${GITLAB_HOST}" | grep -q "^https\?://"; then
-                        GITLAB_BASE_URL="https://${GITLAB_HOST}"
-                    elif [ "${GITLAB_HOST}" = "gitlab.com" ]; then
-                        GITLAB_BASE_URL="https://gitlab.com"
-                    else
-                        GITLAB_BASE_URL="${GITLAB_HOST}"
-                    fi
-                    
-                    # URL encode the project path (handle spaces and special chars)
-                    PROJECT_PATH_ENCODED=$(echo "${PROJECT_PATH}" | sed 's|/|%2F|g' | sed 's| |%20|g')
-                    
-                    MR_IID="${ENV0_PR_NUMBER}"
-                    API_URL="${GITLAB_BASE_URL}/api/v4/projects/${PROJECT_PATH_ENCODED}/merge_requests/${MR_IID}/notes"
-                    
-                    echo "Posting simulation results to GitLab MR ${PROJECT_PATH}!${MR_IID}..."
-                    
-                    # Create JSON payload file using jq
-                    JSON_PAYLOAD_FILE=$(mktemp)
-                    jq -n --rawfile body "${MARKDOWN_FILE}" '{body: $body}' > "${JSON_PAYLOAD_FILE}"
-                    
-                    # Post comment using curl
-                    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                        -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-                        -H "Content-Type: application/json" \
-                        --data-binary "@${JSON_PAYLOAD_FILE}" \
-                        "${API_URL}")
-                    
-                    # Clean up JSON payload file
-                    rm -f "${JSON_PAYLOAD_FILE}"
-                    
-                    if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
-                        echo "✓ Simulation results posted to GitLab MR"
-                    else
-                        echo "Error: Failed to post comment to GitLab MR (HTTP ${HTTP_CODE})"
-                        exit 1
-                    fi
-                else
-                    # GitHub pull request
-                    if [ -z "${GH_BINARY}" ] || [ ! -x "${GH_BINARY}" ]; then
-                        echo "Error: GitHub CLI was not installed correctly"
-                        exit 1
-                    fi
-                    
-                    if ! "${GH_BINARY}" auth status >/dev/null 2>&1; then
-                        echo "Warning: GitHub CLI authentication not detected. Ensure GH_TOKEN is configured."
-                    fi
-                    
-                    echo "Posting simulation results to ${ENV0_PR_SOURCE_REPOSITORY}#${ENV0_PR_NUMBER}..."
-                    "${GH_BINARY}" pr comment "${ENV0_PR_NUMBER}" \
-                        --repo "${ENV0_PR_SOURCE_REPOSITORY}" \
-                        --body-file "${MARKDOWN_FILE}"
-                    echo "✓ Simulation results posted to GitHub PR"
+
+                comment_provider=$(echo "${inputs.comment_provider}" | tr '[:upper:]' '[:lower:]')
+                if [ -z "${comment_provider}" ]; then
+                    echo "Error: comment_provider input must be set to 'github' or 'gitlab' when post_comment=true"
+                    exit 1
                 fi
+
+                case "${comment_provider}" in
+                    gitlab)
+                        # GitLab merge request
+                        if [ -z "${GITLAB_TOKEN}" ]; then
+                            echo "Error: GITLAB_TOKEN environment variable is not set but comment_provider=gitlab"
+                            exit 1
+                        fi
+
+                        # Extract GitLab base URL and project path from repository string
+                        # ENV0_PR_SOURCE_REPOSITORY format: "group/project" or "https://gitlab.com/group/project" or "gitlab.com/group/project"
+                        REPO_STR="${ENV0_PR_SOURCE_REPOSITORY}"
+
+                        # Remove protocol if present
+                        REPO_STR=$(echo "${REPO_STR}" | sed 's|^https\?://||')
+
+                        # Extract host (default to gitlab.com if not specified)
+                        if echo "${REPO_STR}" | grep -q "/"; then
+                            GITLAB_HOST=$(echo "${REPO_STR}" | cut -d'/' -f1)
+                            PROJECT_PATH=$(echo "${REPO_STR}" | cut -d'/' -f2-)
+                        else
+                            # If no host, assume gitlab.com
+                            GITLAB_HOST="gitlab.com"
+                            PROJECT_PATH="${REPO_STR}"
+                        fi
+
+                        # Ensure we have https:// prefix for API calls
+                        if [ "${GITLAB_HOST}" != "gitlab.com" ] && ! echo "${GITLAB_HOST}" | grep -q "^https\?://"; then
+                            GITLAB_BASE_URL="https://${GITLAB_HOST}"
+                        elif [ "${GITLAB_HOST}" = "gitlab.com" ]; then
+                            GITLAB_BASE_URL="https://gitlab.com"
+                        else
+                            GITLAB_BASE_URL="${GITLAB_HOST}"
+                        fi
+
+                        # URL encode the project path (handle spaces and special chars)
+                        PROJECT_PATH_ENCODED=$(echo "${PROJECT_PATH}" | sed 's|/|%2F|g' | sed 's| |%20|g')
+
+                        MR_IID="${ENV0_PR_NUMBER}"
+                        API_URL="${GITLAB_BASE_URL}/api/v4/projects/${PROJECT_PATH_ENCODED}/merge_requests/${MR_IID}/notes"
+
+                        echo "Posting simulation results to GitLab MR ${PROJECT_PATH}!${MR_IID}..."
+
+                        # Create JSON payload file using jq
+                        JSON_PAYLOAD_FILE=$(mktemp)
+                        jq -n --rawfile body "${MARKDOWN_FILE}" '{body: $body}' > "${JSON_PAYLOAD_FILE}"
+
+                        # Post comment using curl
+                        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                            -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            --data-binary "@${JSON_PAYLOAD_FILE}" \
+                            "${API_URL}")
+
+                        # Clean up JSON payload file
+                        rm -f "${JSON_PAYLOAD_FILE}"
+
+                        if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+                            echo "✓ Simulation results posted to GitLab MR"
+                        else
+                            echo "Error: Failed to post comment to GitLab MR (HTTP ${HTTP_CODE})"
+                            exit 1
+                        fi
+                        ;;
+                    github)
+                        # GitHub pull request
+                        if [ -z "${GH_BINARY}" ] || [ ! -x "${GH_BINARY}" ]; then
+                            echo "Error: GitHub CLI was not installed correctly"
+                            exit 1
+                        fi
+
+                        if ! "${GH_BINARY}" auth status >/dev/null 2>&1; then
+                            echo "Warning: GitHub CLI authentication not detected. Ensure GH_TOKEN is configured."
+                        fi
+
+                        echo "Posting simulation results to ${ENV0_PR_SOURCE_REPOSITORY}#${ENV0_PR_NUMBER}..."
+                        "${GH_BINARY}" pr comment "${ENV0_PR_NUMBER}" \
+                            --repo "${ENV0_PR_SOURCE_REPOSITORY}" \
+                            --body-file "${MARKDOWN_FILE}"
+                        echo "✓ Simulation results posted to GitHub PR"
+                        ;;
+                    *)
+                        echo "Error: comment_provider input must be 'github' or 'gitlab' when post_comment=true"
+                        exit 1
+                        ;;
+                esac
             else
                 if [ -n "${ENV0_PR_NUMBER}" ]; then
                     echo "Skipping comment because post_comment=false."
