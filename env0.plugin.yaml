@@ -165,7 +165,11 @@ run:
             GH_BINARY_NAME="gh"
             GH_INSTALL_PATH="${INSTALL_DIR}/gh"
         fi
-        GH_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        if [ -n "${GH_TOKEN}" ]; then
+            GH_LATEST_VERSION=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "https://api.github.com/repos/${GH_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        else
+            GH_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        fi
         if [ -z "${GH_LATEST_VERSION}" ]; then
             echo "Failed to fetch latest GitHub CLI version"
             exit 1
@@ -176,7 +180,11 @@ run:
         echo "Downloading ${GH_FILENAME}..."
         GH_TMP_DIR=$(mktemp -d)
         cd "${GH_TMP_DIR}"
-        curl -fsSL "${GH_DOWNLOAD_URL}" -o gh-archive
+        if [ -n "${GH_TOKEN}" ]; then
+            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "${GH_DOWNLOAD_URL}" -o gh-archive
+        else
+            curl -fsSL "${GH_DOWNLOAD_URL}" -o gh-archive
+        fi
         if [ "${GH_ARCHIVE_EXT}" = "tar.gz" ]; then
             tar -xzf gh-archive
         else
