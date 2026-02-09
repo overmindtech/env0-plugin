@@ -23,13 +23,14 @@ run:
   exec: |
     #!/bin/sh
     set -e
-    
+
     TMP_DIR=""
     GH_TMP_DIR=""
+    GH_BINARY=""
     MARKDOWN_FILE=""
     JSON_PAYLOAD_FILE=""
     ORIGINAL_DIR=$(pwd)
-    
+
     cleanup() {
         if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
             rm -rf "${TMP_DIR}"
@@ -45,39 +46,39 @@ run:
         fi
     }
     trap cleanup EXIT
-    
+
     # Export API key as environment variable
     export OVM_API_KEY="${inputs.api_key}"
-    
+
     # Install Overmind CLI
     REPO="overmindtech/cli"
     OS=$(uname -s)
     ARCH=$(uname -m)
-    
+
     case "${ARCH}" in
         x86_64) ARCH="x86_64" ;;
         aarch64|arm64) ARCH="arm64" ;;
         i386|i686) ARCH="i386" ;;
         *) echo "Unsupported architecture: ${ARCH}"; exit 1 ;;
     esac
-    
+
     case "${OS}" in
         Linux|Darwin) ARCHIVE_EXT="tar.gz" ;;
         MINGW*|MSYS*|CYGWIN*) OS="Windows"; ARCHIVE_EXT="zip" ;;
         *) echo "Unsupported OS: ${OS}"; exit 1 ;;
     esac
-    
+
     # Function to find a writable directory in PATH
     find_install_dir() {
         IFS=':'
         for dir in $PATH; do
             [ -z "$dir" ] && continue
-            
+
             # Create directory if it doesn't exist (if parent is writable)
             if [ ! -d "$dir" ]; then
                 mkdir -p "$dir" 2>/dev/null || continue
             fi
-            
+
             # Check if directory is writable
             if [ -w "$dir" ]; then
                 echo "$dir"
@@ -88,38 +89,38 @@ run:
         unset IFS
         return 1
     }
-    
+
     INSTALL_DIR=$(find_install_dir)
     if [ -z "${INSTALL_DIR}" ]; then
         echo "Error: No writable directory found in PATH"
         echo "Current PATH: ${PATH}"
         exit 1
     fi
-    
+
     echo "Installing to: ${INSTALL_DIR}"
     echo "Downloading latest Overmind release..."
-    
+
     FILENAME="overmind_cli_${OS}_${ARCH}.${ARCHIVE_EXT}"
     DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${FILENAME}"
-    
+
     echo "Downloading ${FILENAME}..."
     TMP_DIR=$(mktemp -d)
     cd "${TMP_DIR}"
-    
+
     curl -fsSL "${DOWNLOAD_URL}" -o archive
-    
+
     if [ "${ARCHIVE_EXT}" = "tar.gz" ]; then
         tar -xzf archive
     else
         unzip -q archive
     fi
-    
+
     if [ "${OS}" = "Windows" ]; then
         EXPECTED_BINARY="overmind.exe"
     else
         EXPECTED_BINARY="overmind"
     fi
-    
+
     if [ -f "${EXPECTED_BINARY}" ]; then
         BINARY="./${EXPECTED_BINARY}"
     else
@@ -130,97 +131,89 @@ run:
         ls -la
         exit 1
     fi
-    
+
     cp "${BINARY}" "${INSTALL_DIR}/overmind"
     chmod +x "${INSTALL_DIR}/overmind"
     echo "✓ Overmind CLI installed to ${INSTALL_DIR}/overmind"
-    
+
     # Verify installation
     "${INSTALL_DIR}/overmind" version 2>/dev/null || echo "Installation complete"
     cd "${ORIGINAL_DIR}"
-    
-    # Install GitHub CLI
-    GH_REPO="cli/cli"
-    echo "Installing GitHub CLI..."
-    
-    case "${ARCH}" in
-        x86_64) GH_ARCH="amd64" ;;
-        arm64) GH_ARCH="arm64" ;;
-        i386) GH_ARCH="386" ;;
-        *) echo "Unsupported architecture for GitHub CLI: ${ARCH}"; exit 1 ;;
-    esac
-    
-    case "${OS}" in
-        Linux) GH_OS="linux" ;;
-        Darwin) GH_OS="macOS" ;;
-        Windows) GH_OS="windows" ;;
-        *) echo "Unsupported OS for GitHub CLI: ${OS}"; exit 1 ;;
-    esac
-    
-    if [ "${OS}" = "Windows" ]; then
-        GH_ARCHIVE_EXT="zip"
-        GH_BINARY_NAME="gh.exe"
-        GH_INSTALL_PATH="${INSTALL_DIR}/gh.exe"
-    else
-        GH_ARCHIVE_EXT="tar.gz"
-        GH_BINARY_NAME="gh"
-        GH_INSTALL_PATH="${INSTALL_DIR}/gh"
-    fi
-    
-    GH_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    if [ -z "${GH_LATEST_VERSION}" ]; then
-        echo "Failed to fetch latest GitHub CLI version"
-        exit 1
-    fi
-    
-    GH_VERSION_NUMBER=$(echo "${GH_LATEST_VERSION}" | sed 's/^v//')
-    GH_FILENAME="gh_${GH_VERSION_NUMBER}_${GH_OS}_${GH_ARCH}.${GH_ARCHIVE_EXT}"
-    GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${GH_LATEST_VERSION}/${GH_FILENAME}"
-    
-    echo "Downloading ${GH_FILENAME}..."
-    GH_TMP_DIR=$(mktemp -d)
-    cd "${GH_TMP_DIR}"
-    curl -fsSL "${GH_DOWNLOAD_URL}" -o gh-archive
-    
-    if [ "${GH_ARCHIVE_EXT}" = "tar.gz" ]; then
-        tar -xzf gh-archive
-    else
-        unzip -q gh-archive
-    fi
-    
-    GH_EXTRACTED_DIR=$(find . -maxdepth 1 -type d -name "gh_*" | head -n 1)
-    if [ -z "${GH_EXTRACTED_DIR}" ]; then
-        echo "Error: Could not find extracted GitHub CLI directory"
-        exit 1
-    fi
-    
-    GH_BINARY_PATH="${GH_EXTRACTED_DIR}/bin/${GH_BINARY_NAME}"
-    if [ ! -f "${GH_BINARY_PATH}" ]; then
-        echo "Error: GitHub CLI binary not found in archive"
-        exit 1
-    fi
-    
-    cp "${GH_BINARY_PATH}" "${GH_INSTALL_PATH}"
-    chmod +x "${GH_INSTALL_PATH}"
-    echo "✓ GitHub CLI ${GH_LATEST_VERSION} installed to ${GH_INSTALL_PATH}"
-    GH_BINARY="${GH_INSTALL_PATH}"
-    cd "${ORIGINAL_DIR}"
-    
+
+    # Install GitHub CLI only when needed (wait-for-simulation + comment_provider=github)
+    install_github_cli() {
+        GH_REPO="cli/cli"
+        echo "Installing GitHub CLI..."
+        case "${ARCH}" in
+            x86_64) GH_ARCH="amd64" ;;
+            arm64) GH_ARCH="arm64" ;;
+            i386) GH_ARCH="386" ;;
+            *) echo "Unsupported architecture for GitHub CLI: ${ARCH}"; exit 1 ;;
+        esac
+        case "${OS}" in
+            Linux) GH_OS="linux" ;;
+            Darwin) GH_OS="macOS" ;;
+            Windows) GH_OS="windows" ;;
+            *) echo "Unsupported OS for GitHub CLI: ${OS}"; exit 1 ;;
+        esac
+        if [ "${OS}" = "Windows" ]; then
+            GH_ARCHIVE_EXT="zip"
+            GH_BINARY_NAME="gh.exe"
+            GH_INSTALL_PATH="${INSTALL_DIR}/gh.exe"
+        else
+            GH_ARCHIVE_EXT="tar.gz"
+            GH_BINARY_NAME="gh"
+            GH_INSTALL_PATH="${INSTALL_DIR}/gh"
+        fi
+        GH_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        if [ -z "${GH_LATEST_VERSION}" ]; then
+            echo "Failed to fetch latest GitHub CLI version"
+            exit 1
+        fi
+        GH_VERSION_NUMBER=$(echo "${GH_LATEST_VERSION}" | sed 's/^v//')
+        GH_FILENAME="gh_${GH_VERSION_NUMBER}_${GH_OS}_${GH_ARCH}.${GH_ARCHIVE_EXT}"
+        GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${GH_LATEST_VERSION}/${GH_FILENAME}"
+        echo "Downloading ${GH_FILENAME}..."
+        GH_TMP_DIR=$(mktemp -d)
+        cd "${GH_TMP_DIR}"
+        curl -fsSL "${GH_DOWNLOAD_URL}" -o gh-archive
+        if [ "${GH_ARCHIVE_EXT}" = "tar.gz" ]; then
+            tar -xzf gh-archive
+        else
+            unzip -q gh-archive
+        fi
+        GH_EXTRACTED_DIR=$(find . -maxdepth 1 -type d -name "gh_*" | head -n 1)
+        if [ -z "${GH_EXTRACTED_DIR}" ]; then
+            echo "Error: Could not find extracted GitHub CLI directory"
+            exit 1
+        fi
+        GH_BINARY_PATH="${GH_EXTRACTED_DIR}/bin/${GH_BINARY_NAME}"
+        if [ ! -f "${GH_BINARY_PATH}" ]; then
+            echo "Error: GitHub CLI binary not found in archive"
+            exit 1
+        fi
+        cp "${GH_BINARY_PATH}" "${GH_INSTALL_PATH}"
+        chmod +x "${GH_INSTALL_PATH}"
+        echo "✓ GitHub CLI ${GH_LATEST_VERSION} installed to ${GH_INSTALL_PATH}"
+        GH_BINARY="${GH_INSTALL_PATH}"
+        cd "${ORIGINAL_DIR}"
+    }
+
     # Construct the env0 deployment URL for the ticket-link
     ticket_link="https://app.env0.com/p/${ENV0_PROJECT_ID}/environments/${ENV0_ENVIRONMENT_ID}/deployments/${ENV0_DEPLOYMENT_LOG_ID}?organizationId=${ENV0_ORGANIZATION_ID}"
-    
+
     # Build description from env0 deployment info
     description="Env0 Deployment: ${ENV0_PROJECT_NAME} - ${ENV0_ENVIRONMENT_NAME} (${ENV0_DEPLOYMENT_TYPE})"
     if [ -n "${ENV0_DEPLOYER_NAME}" ]; then
         description="${description} by ${ENV0_DEPLOYER_NAME}"
     fi
-    
+
     # Build title from env0 deployment info
     title="${ENV0_PROJECT_NAME} - ${ENV0_ENVIRONMENT_NAME}"
     if [ -n "${ENV0_TEMPLATE_NAME}" ]; then
         title="${ENV0_TEMPLATE_NAME} (${ENV0_ENVIRONMENT_NAME})"
     fi
-    
+
     # Execute the appropriate action based on input
     case "${inputs.action}" in
         submit-plan)
@@ -229,7 +222,7 @@ run:
                 exit 1
             fi
             echo "Submitting plan to Overmind..."
-            
+
             # Generate code changes diff if in a git repository
             DIFF_FILE=""
             if [ -d "${ENV0_TEMPLATE_DIR}/.git" ] && [ -n "${ENV0_TEMPLATE_REVISION}" ]; then
@@ -243,7 +236,7 @@ run:
                     fi
                 fi
             fi
-            
+
             # Find terraform plan output file if it exists
             PLAN_OUTPUT=""
             if [ -f "${ENV0_TEMPLATE_DIR}/.tf-plan-output" ]; then
@@ -251,7 +244,7 @@ run:
             elif [ -f "${ENV0_ROOT_DIR}/.tf-plan-output" ]; then
                 PLAN_OUTPUT="${ENV0_ROOT_DIR}/.tf-plan-output"
             fi
-            
+
             # Determine owner (prefer name over email)
             OWNER=""
             if [ -n "${ENV0_DEPLOYER_NAME}" ]; then
@@ -259,7 +252,7 @@ run:
             elif [ -n "${ENV0_DEPLOYER_EMAIL}" ]; then
                 OWNER="${ENV0_DEPLOYER_EMAIL}"
             fi
-            
+
             # Build submit-plan command with all available information
             set -- "${INSTALL_DIR}/overmind" changes submit-plan \
                 "${ENV0_TF_PLAN_JSON}" \
@@ -285,7 +278,7 @@ run:
                 set -- "$@" --code-changes-diff "${DIFF_FILE}"
             fi
             "$@"
-            
+
             # Clean up diff file if created
             if [ -n "${DIFF_FILE}" ] && [ -f "${DIFF_FILE}" ]; then
                 rm -f "${DIFF_FILE}"
@@ -320,7 +313,7 @@ run:
                     should_post_comment="false"
                 fi
             fi
-            
+
             MARKDOWN_FILE=$(mktemp)
             set -- "${INSTALL_DIR}/overmind" changes get-change \
                 --ticket-link "${ticket_link}" \
@@ -332,12 +325,12 @@ run:
                 echo "Error: Failed to retrieve change markdown from Overmind"
                 exit 1
             fi
-            
+
             if [ ! -s "${MARKDOWN_FILE}" ]; then
                 echo "Error: Overmind did not return any markdown content"
                 exit 1
             fi
-            
+
             if [ "${should_post_comment}" = "true" ]; then
                 if [ -z "${ENV0_PR_NUMBER}" ]; then
                     echo "Error: ENV0_PR_NUMBER environment variable is not set but post_comment=true"
@@ -418,6 +411,8 @@ run:
                         fi
                         ;;
                     github)
+                        install_github_cli
+
                         # GitHub pull request
                         if [ -z "${GH_BINARY}" ] || [ ! -x "${GH_BINARY}" ]; then
                             echo "Error: GitHub CLI was not installed correctly"
@@ -452,4 +447,3 @@ run:
             exit 1
             ;;
     esac
-
