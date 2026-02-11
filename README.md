@@ -19,6 +19,7 @@ The Overmind plugin installs the Overmind CLI (and GitHub CLI) and executes one 
 | `tags` | A comma-separated list of key=value tags to attach to the change (only used with `submit-plan` action) | No |
 | `post_comment` | Whether `wait-for-simulation` should post the Overmind markdown to GitHub PR or GitLab MR. Defaults to `true` when running against a PR/MR, otherwise `false`. When `true`, `comment_provider` must be set. | No |
 | `comment_provider` | Where `wait-for-simulation` should post comments when `post_comment=true`. Must be one of: `github`, `gitlab`. | No |
+| `on_failure` | Behavior when the plugin step errors. `fail` (default) fails the step and blocks the deployment; `pass` allows the deployment to continue even if this step errors. Must be one of: `fail`, `pass`. | No |
 
 ## Usage
 
@@ -138,6 +139,21 @@ deploy:
             post_comment: true
             comment_provider: gitlab
 ```
+
+### Fail-safe: allow deployment to continue on plugin errors
+
+By default, if the plugin step fails (e.g. Overmind API error, missing env var, network issue), env0 treats the step as failed and can block the deployment. To allow the deployment to continue even when this step errors, set `on_failure: pass`:
+
+```yaml
+        - name: Submit Plan to Overmind
+          use: https://github.com/your-org/env0-plugin
+          inputs:
+            action: submit-plan
+            api_key: ${OVERMIND_API_KEY}
+            on_failure: pass   # deployment continues even if this step fails
+```
+
+Use `on_failure: pass` when the Overmind integration is optional and you do not want plugin failures to block deployments.
 
 ### Complete Example
 
