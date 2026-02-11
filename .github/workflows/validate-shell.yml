@@ -34,7 +34,7 @@ jobs:
       - name: Validate shell syntax with shellcheck
         run: |
           echo "Validating shell syntax..."
-          shellcheck -x /tmp/script.sh || {
+          shellcheck -s bash -x /tmp/script.sh || {
             echo "::error::Shell syntax validation failed"
             exit 1
           }

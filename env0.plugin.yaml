@@ -19,9 +19,12 @@ inputs:
   comment_provider:
     description: "Where to post PR/MR comments when wait-for-simulation runs with post_comment=true. Must be one of: github, gitlab."
     required: false
+  on_failure:
+    description: "Behavior when an error occurs. 'fail' (default) fails the plugin step and blocks the deployment; 'pass' allows the deployment to continue even if this step errors."
+    required: false
 run:
   exec: |
-    #!/bin/sh
+    #!/usr/bin/env bash
     set -e
 
     TMP_DIR=""
@@ -30,6 +33,16 @@ run:
     MARKDOWN_FILE=""
     JSON_PAYLOAD_FILE=""
     ORIGINAL_DIR=$(pwd)
+
+    ON_FAILURE="${inputs.on_failure:-fail}"
+    ON_FAILURE=$(echo "${ON_FAILURE}" | tr '[:upper:]' '[:lower:]')
+    case "${ON_FAILURE}" in
+        pass|fail) ;;
+        *) echo "Error: on_failure must be 'pass' or 'fail'"; exit 1 ;;
+    esac
+    if [ "${ON_FAILURE}" = "pass" ]; then
+        trap 'echo "Plugin step failed (on_failure=pass); deployment will continue."; exit 0' ERR
+    fi
 
     cleanup() {
         if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
