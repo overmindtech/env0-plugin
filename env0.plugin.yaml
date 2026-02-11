@@ -26,7 +26,8 @@ run:
   exec: |
     #!/bin/sh
 
-    ON_FAILURE="${inputs.on_failure:-fail}"
+    _on_failure="${inputs.on_failure}"
+    ON_FAILURE="${_on_failure:-fail}"
     ON_FAILURE=$(echo "${ON_FAILURE}" | tr '[:upper:]' '[:lower:]')
     case "${ON_FAILURE}" in
         pass|fail) ;;
