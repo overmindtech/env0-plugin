@@ -24,15 +24,7 @@ inputs:
     required: false
 run:
   exec: |
-    #!/usr/bin/env bash
-    set -e
-
-    TMP_DIR=""
-    GH_TMP_DIR=""
-    GH_BINARY=""
-    MARKDOWN_FILE=""
-    JSON_PAYLOAD_FILE=""
-    ORIGINAL_DIR=$(pwd)
+    #!/bin/sh
 
     ON_FAILURE="${inputs.on_failure:-fail}"
     ON_FAILURE=$(echo "${ON_FAILURE}" | tr '[:upper:]' '[:lower:]')
@@ -40,9 +32,6 @@ run:
         pass|fail) ;;
         *) echo "Error: on_failure must be 'pass' or 'fail'"; exit 1 ;;
     esac
-    if [ "${ON_FAILURE}" = "pass" ]; then
-        trap 'echo "Plugin step failed (on_failure=pass); deployment will continue."; exit 0' ERR
-    fi
 
     cleanup() {
         if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
@@ -58,7 +47,15 @@ run:
             rm -f "${JSON_PAYLOAD_FILE}"
         fi
     }
-    trap cleanup EXIT
+    main_script() {
+        set -e
+        trap cleanup EXIT
+        TMP_DIR=""
+        GH_TMP_DIR=""
+        GH_BINARY=""
+        MARKDOWN_FILE=""
+        JSON_PAYLOAD_FILE=""
+        ORIGINAL_DIR=$(pwd)
 
     # Export API key as environment variable
     export OVM_API_KEY="${inputs.api_key}"
@@ -460,3 +457,9 @@ run:
             exit 1
             ;;
     esac
+    }
+    if [ "${ON_FAILURE}" = "pass" ]; then
+        ( main_script ) || { echo "Plugin step failed (on_failure=pass); deployment will continue."; exit 0; }
+    else
+        main_script
+    fi
