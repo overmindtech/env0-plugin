@@ -19,17 +19,20 @@ inputs:
   comment_provider:
     description: "Where to post PR/MR comments when wait-for-simulation runs with post_comment=true. Must be one of: github, gitlab."
     required: false
+  on_failure:
+    description: "Behavior when an error occurs. 'fail' (default) fails the plugin step and blocks the deployment; 'pass' allows the deployment to continue even if this step errors."
+    required: false
 run:
   exec: |
     #!/bin/sh
-    set -e
 
-    TMP_DIR=""
-    GH_TMP_DIR=""
-    GH_BINARY=""
-    MARKDOWN_FILE=""
-    JSON_PAYLOAD_FILE=""
-    ORIGINAL_DIR=$(pwd)
+    _on_failure="${inputs.on_failure}"
+    ON_FAILURE="${_on_failure:-fail}"
+    ON_FAILURE=$(echo "${ON_FAILURE}" | tr '[:upper:]' '[:lower:]')
+    case "${ON_FAILURE}" in
+        pass|fail) ;;
+        *) echo "Error: on_failure must be 'pass' or 'fail'"; exit 1 ;;
+    esac
 
     cleanup() {
         if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
@@ -45,7 +48,15 @@ run:
             rm -f "${JSON_PAYLOAD_FILE}"
         fi
     }
-    trap cleanup EXIT
+    main_script() {
+        set -e
+        trap cleanup EXIT
+        TMP_DIR=""
+        GH_TMP_DIR=""
+        GH_BINARY=""
+        MARKDOWN_FILE=""
+        JSON_PAYLOAD_FILE=""
+        ORIGINAL_DIR=$(pwd)
 
     # Export API key as environment variable
     export OVM_API_KEY="${inputs.api_key}"
@@ -447,3 +458,9 @@ run:
             exit 1
             ;;
     esac
+    }
+    if [ "${ON_FAILURE}" = "pass" ]; then
+        ( main_script ) || { echo "Plugin step failed (on_failure=pass); deployment will continue."; exit 0; }
+    else
+        main_script
+    fi
