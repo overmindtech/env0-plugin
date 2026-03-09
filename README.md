@@ -98,7 +98,7 @@ Fetch the latest Overmind simulation summary for the current env0 deployment and
 version: 2
 deploy:
   steps:
-    terraformApply:
+    terraformPlan:
       after:
         - name: Post Overmind Simulation
           use: https://github.com/your-org/env0-plugin
@@ -114,7 +114,7 @@ If you want to post a comment, set `comment_provider` explicitly:
 version: 2
 deploy:
   steps:
-    terraformApply:
+    terraformPlan:
       after:
         - name: Post Overmind Simulation (GitHub)
           use: https://github.com/your-org/env0-plugin
@@ -129,7 +129,7 @@ deploy:
 version: 2
 deploy:
   steps:
-    terraformApply:
+    terraformPlan:
       after:
         - name: Post Overmind Simulation (GitLab)
           use: https://github.com/your-org/env0-plugin
