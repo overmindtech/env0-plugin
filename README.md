@@ -5,6 +5,7 @@ This plugin integrates [Overmind](https://www.overmind.tech/) with env0 to track
 ## Overview
 
 The Overmind plugin installs the Overmind CLI (and GitHub CLI) and executes one of four actions:
+
 - **submit-plan**: Submits a Terraform plan to Overmind for analysis
 - **start-change**: Marks the beginning of a change in Overmind
 - **end-change**: Marks the completion of a change in Overmind
@@ -12,14 +13,14 @@ The Overmind plugin installs the Overmind CLI (and GitHub CLI) and executes one 
 
 ## Inputs
 
-| Input | Description | Required |
-|-------|-------------|----------|
-| `action` | The action to perform. Must be one of: `submit-plan`, `start-change`, `end-change`, `wait-for-simulation` | Yes |
-| `api_key` | Overmind API key for authentication. Must have the following scopes: `account:read`, `changes:write`, `config:write`, `request:receive`, `sources:read`, `source:write` | Yes |
-| `tags` | A comma-separated list of key=value tags to attach to the change (only used with `submit-plan` action) | No |
-| `post_comment` | Whether `wait-for-simulation` should post the Overmind markdown to GitHub PR or GitLab MR. Defaults to `true` when running against a PR/MR, otherwise `false`. When `true`, `comment_provider` must be set. | No |
-| `comment_provider` | Where `wait-for-simulation` should post comments when `post_comment=true`. Must be one of: `github`, `gitlab`. | No |
-| `on_failure` | Behavior when the plugin step errors. `fail` (default) fails the step and blocks the deployment; `pass` allows the deployment to continue even if this step errors. Must be one of: `fail`, `pass`. | No |
+| Input              | Description                                                                                                                                                                                                 | Required |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `action`           | The action to perform. Must be one of: `submit-plan`, `start-change`, `end-change`, `wait-for-simulation`                                                                                                   | Yes      |
+| `api_key`          | Overmind API key for authentication. Must have the following scopes: `account:read`, `changes:write`, `config:write`, `request:receive`, `sources:read`, `source:write`                                     | Yes      |
+| `tags`             | A comma-separated list of key=value tags to attach to the change (only used with `submit-plan` action)                                                                                                      | No       |
+| `post_comment`     | Whether `wait-for-simulation` should post the Overmind markdown to GitHub PR or GitLab MR. Defaults to `true` when running against a PR/MR, otherwise `false`. When `true`, `comment_provider` must be set. | No       |
+| `comment_provider` | Where `wait-for-simulation` should post comments when `post_comment=true`. Must be one of: `github`, `gitlab`.                                                                                              | No       |
+| `on_failure`       | Behavior when the plugin step errors. `fail` (default) fails the step and blocks the deployment; `pass` allows the deployment to continue even if this step errors. Must be one of: `fail`, `pass`.         | No       |
 
 ## Usage
 
@@ -105,7 +106,7 @@ deploy:
           inputs:
             action: wait-for-simulation
             api_key: ${OVERMIND_API_KEY}
-            post_comment: false   # optional override
+            post_comment: false # optional override
 ```
 
 If you want to post a comment, set `comment_provider` explicitly:
@@ -140,17 +141,48 @@ deploy:
             comment_provider: gitlab
 ```
 
+### Self-Hosted GitLab
+
+For self-hosted GitLab environments where `ENV0_PR_SOURCE_REPOSITORY` is not available, the plugin falls back to `ENV0_TEMPLATE_REPOSITORY` to derive the GitLab API URL for posting merge request comments.
+
+For authentication, the plugin uses `GITLAB_TOKEN` if set, otherwise falls back to `ENV0_VCS_ACCESS_TOKEN`. The token must have the GitLab `api` scope to post MR comments.
+
+```yaml
+version: 2
+deploy:
+  steps:
+    terraformPlan:
+      after:
+        - name: Submit Plan to Overmind
+          use: https://github.com/overmindtech/env0-plugin
+          inputs:
+            action: submit-plan
+            api_key: ${OVERMIND_API_KEY}
+
+    terraformApply:
+      after:
+        - name: Post Overmind Simulation (Self-Hosted GitLab)
+          use: https://github.com/overmindtech/env0-plugin
+          inputs:
+            action: wait-for-simulation
+            api_key: ${OVERMIND_API_KEY}
+            post_comment: true
+            comment_provider: gitlab
+```
+
+No `GITLAB_TOKEN` is needed if `ENV0_VCS_ACCESS_TOKEN` is already available in your env0 environment.
+
 ### Fail-safe: allow deployment to continue on plugin errors
 
 By default, if the plugin step fails (e.g. Overmind API error, missing env var, network issue), env0 treats the step as failed and can block the deployment. To allow the deployment to continue even when this step errors, set `on_failure: pass`:
 
 ```yaml
-        - name: Submit Plan to Overmind
-          use: https://github.com/your-org/env0-plugin
-          inputs:
-            action: submit-plan
-            api_key: ${OVERMIND_API_KEY}
-            on_failure: pass   # deployment continues even if this step fails
+- name: Submit Plan to Overmind
+  use: https://github.com/your-org/env0-plugin
+  inputs:
+    action: submit-plan
+    api_key: ${OVERMIND_API_KEY}
+    on_failure: pass # deployment continues even if this step fails
 ```
 
 Use `on_failure: pass` when the Overmind integration is optional and you do not want plugin failures to block deployments.
@@ -170,7 +202,7 @@ deploy:
           inputs:
             action: submit-plan
             api_key: ${OVERMIND_API_KEY}
-    
+
     terraformApply:
       before:
         - name: Mark Change Started
@@ -198,7 +230,7 @@ deploy:
    - `end-change`: Marks the completion of a change with a ticket link to the env0 deployment
    - `wait-for-simulation`: Retrieves Overmind simulation results as Markdown and (when `post_comment=true`) posts them to the GitHub PR or GitLab MR (automatically detected based on repository URL)
 
-4. **Ticket Links**: All actions automatically construct a ticket link to the env0 deployment using environment variables (`ENV0_PROJECT_ID`, `ENV0_ENVIRONMENT_ID`, `ENV0_DEPLOYMENT_LOG_ID`, `ENV0_ORGANIZATION_ID`).
+4. **Ticket Links**: When `ENV0_PR_NUMBER` is set (i.e., the deployment is triggered by a PR/MR), the plugin constructs a stable merge request URL from `ENV0_PR_SOURCE_REPOSITORY` (or `ENV0_TEMPLATE_REPOSITORY` as a fallback) and `ENV0_PR_NUMBER`. This ensures multiple plans for the same MR update the same Overmind change. For non-PR deployments, the ticket link falls back to the env0 deployment URL.
 
 ## Requirements
 
@@ -209,7 +241,7 @@ deploy:
   - `ENV0_ORGANIZATION_ID`
   - `ENV0_TF_PLAN_JSON` (for submit-plan action)
   - `ENV0_PR_NUMBER` (only when `wait-for-simulation` posts comments, i.e., running against a PR/MR)
-  - `ENV0_PR_SOURCE_REPOSITORY` (only when `wait-for-simulation` posts comments, used to detect GitHub vs GitLab)
+  - `ENV0_PR_SOURCE_REPOSITORY` (only when `wait-for-simulation` posts comments to GitHub; for GitLab, falls back to `ENV0_TEMPLATE_REPOSITORY`)
 
 - A valid Overmind API key with the following required scopes:
   - `account:read`
@@ -220,7 +252,7 @@ deploy:
   - `source:write`
 
 - GitHub authentication for the CLI when `wait-for-simulation` posts to GitHub (set `GH_TOKEN`).
-- GitLab authentication when `wait-for-simulation` posts to GitLab (set `GITLAB_TOKEN`).
+- GitLab authentication when `wait-for-simulation` posts to GitLab (set `GITLAB_TOKEN`, or rely on `ENV0_VCS_ACCESS_TOKEN` which is automatically available in self-hosted GitLab environments). The token must have the GitLab `api` scope.
 
 ### Creating a `GH_TOKEN`
 
@@ -242,9 +274,9 @@ deploy:
 5. Store the token securely in env0 (for example as an environment variable or secret) and expose it to the plugin as `GITLAB_TOKEN`.
 
 **Note**: When `post_comment=true`, you must set `comment_provider` to `github` or `gitlab`.
+
 ## Notes
 
 - The plugin automatically detects the operating system and architecture to download the correct Overmind CLI binary.
 - The installation directory is automatically selected from writable directories in your PATH.
 - For the `submit-plan` action, the `ENV0_TF_PLAN_JSON` environment variable must be set (this is automatically provided by env0 after a terraform plan step).
-
