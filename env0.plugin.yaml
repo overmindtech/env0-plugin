@@ -213,6 +213,21 @@ run:
     # Construct the env0 deployment URL for the ticket-link
     ticket_link="https://app.env0.com/p/${ENV0_PROJECT_ID}/environments/${ENV0_ENVIRONMENT_ID}/deployments/${ENV0_DEPLOYMENT_LOG_ID}?organizationId=${ENV0_ORGANIZATION_ID}"
 
+    # Override ticket_link with a stable MR/PR URL when available,
+    # so Overmind deduplicates changes within the same MR/PR
+    if [ -n "${ENV0_PR_NUMBER}" ]; then
+        REPO_URL=""
+        if [ -n "${ENV0_PR_SOURCE_REPOSITORY}" ]; then
+            REPO_URL="${ENV0_PR_SOURCE_REPOSITORY}"
+        elif [ -n "${ENV0_TEMPLATE_REPOSITORY}" ]; then
+            REPO_URL="${ENV0_TEMPLATE_REPOSITORY}"
+        fi
+        if [ -n "${REPO_URL}" ]; then
+            REPO_URL=$(echo "${REPO_URL}" | sed 's|\.git$||')
+            ticket_link="${REPO_URL}/-/merge_requests/${ENV0_PR_NUMBER}"
+        fi
+    fi
+
     # Build description from env0 deployment info
     description="Env0 Deployment: ${ENV0_PROJECT_NAME} - ${ENV0_ENVIRONMENT_NAME} (${ENV0_DEPLOYMENT_TYPE})"
     if [ -n "${ENV0_DEPLOYER_NAME}" ]; then
@@ -347,10 +362,6 @@ run:
                     echo "Error: ENV0_PR_NUMBER environment variable is not set but post_comment=true"
                     exit 1
                 fi
-                if [ -z "${ENV0_PR_SOURCE_REPOSITORY}" ]; then
-                    echo "Error: ENV0_PR_SOURCE_REPOSITORY environment variable is not set but post_comment=true"
-                    exit 1
-                fi
 
                 comment_provider=$(echo "${inputs.comment_provider}" | tr '[:upper:]' '[:lower:]')
                 if [ -z "${comment_provider}" ]; then
@@ -361,17 +372,28 @@ run:
                 case "${comment_provider}" in
                     gitlab)
                         # GitLab merge request
-                        if [ -z "${GITLAB_TOKEN}" ]; then
-                            echo "Error: GITLAB_TOKEN environment variable is not set but comment_provider=gitlab"
+
+                        # Fall back to ENV0_TEMPLATE_REPOSITORY for self-hosted GitLab
+                        # where ENV0_PR_SOURCE_REPOSITORY is not available
+                        if [ -n "${ENV0_PR_SOURCE_REPOSITORY}" ]; then
+                            REPO_STR="${ENV0_PR_SOURCE_REPOSITORY}"
+                        elif [ -n "${ENV0_TEMPLATE_REPOSITORY}" ]; then
+                            REPO_STR="${ENV0_TEMPLATE_REPOSITORY}"
+                        else
+                            echo "Error: Neither ENV0_PR_SOURCE_REPOSITORY nor ENV0_TEMPLATE_REPOSITORY is set"
                             exit 1
                         fi
 
-                        # Extract GitLab base URL and project path from repository string
-                        # ENV0_PR_SOURCE_REPOSITORY format: "group/project" or "https://gitlab.com/group/project" or "gitlab.com/group/project"
-                        REPO_STR="${ENV0_PR_SOURCE_REPOSITORY}"
+                        # Fall back to ENV0_VCS_ACCESS_TOKEN for self-hosted GitLab
+                        GITLAB_TOKEN="${GITLAB_TOKEN:-${ENV0_VCS_ACCESS_TOKEN}}"
+                        if [ -z "${GITLAB_TOKEN}" ]; then
+                            echo "Error: Neither GITLAB_TOKEN nor ENV0_VCS_ACCESS_TOKEN is set"
+                            exit 1
+                        fi
 
-                        # Remove protocol if present
+                        # Remove protocol and trailing .git if present
                         REPO_STR=$(echo "${REPO_STR}" | sed 's|^https\?://||')
+                        REPO_STR=$(echo "${REPO_STR}" | sed 's|\.git$||')
 
                         # Extract host (default to gitlab.com if not specified)
                         if echo "${REPO_STR}" | grep -q "/"; then
@@ -422,6 +444,11 @@ run:
                         fi
                         ;;
                     github)
+                        if [ -z "${ENV0_PR_SOURCE_REPOSITORY}" ]; then
+                            echo "Error: ENV0_PR_SOURCE_REPOSITORY environment variable is not set but comment_provider=github"
+                            exit 1
+                        fi
+
                         install_github_cli
 
                         # GitHub pull request
