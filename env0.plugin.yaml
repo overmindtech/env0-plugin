@@ -2,22 +2,22 @@ name: Overmind
 icon: https://avatars.githubusercontent.com/u/93521445
 inputs:
   action:
-    description: "The action to perform. Must be one of: submit-plan, start-change, end-change, wait-for-simulation"
+    description: 'The action to perform. Must be one of: submit-plan, start-change, end-change, wait-for-simulation'
     required: true
   api_key:
-    description: "Overmind API key for authentication"
+    description: 'Overmind API key for authentication'
     required: true
   tags:
-    description: "A comma-separated list of key=value tags to attach to the change (only used with submit-plan action)"
+    description: 'A comma-separated list of key=value tags to attach to the change (only used with submit-plan action)'
     required: false
   app:
-    description: "The Overmind instance to connect to (defaults to https://app.overmind.tech)"
+    description: 'The Overmind instance to connect to (defaults to https://app.overmind.tech)'
     required: false
   post_comment:
-    description: "Whether wait-for-simulation should post the Overmind markdown to the PR/MR. Defaults to true when ENV0_PR_NUMBER is set, otherwise false. When true, comment_provider must be set."
+    description: 'Whether wait-for-simulation should post the Overmind markdown to the PR/MR. Defaults to true when ENV0_PR_NUMBER is set, otherwise false. When true, comment_provider must be set.'
     required: false
   comment_provider:
-    description: "Where to post PR/MR comments when wait-for-simulation runs with post_comment=true. Must be one of: github, gitlab."
+    description: 'Where to post PR/MR comments when wait-for-simulation runs with post_comment=true. Must be one of: github, gitlab.'
     required: false
   on_failure:
     description: "Behavior when an error occurs. 'fail' (default) fails the plugin step and blocks the deployment; 'pass' allows the deployment to continue even if this step errors."
@@ -47,6 +47,15 @@ run:
         if [ -n "${JSON_PAYLOAD_FILE}" ] && [ -f "${JSON_PAYLOAD_FILE}" ]; then
             rm -f "${JSON_PAYLOAD_FILE}"
         fi
+        if [ -n "${GITLAB_NOTES_PAGE_FILE}" ] && [ -f "${GITLAB_NOTES_PAGE_FILE}" ]; then
+            rm -f "${GITLAB_NOTES_PAGE_FILE}"
+        fi
+        if [ -n "${GITLAB_FALLBACK_BODY_FILE}" ] && [ -f "${GITLAB_FALLBACK_BODY_FILE}" ]; then
+            rm -f "${GITLAB_FALLBACK_BODY_FILE}"
+        fi
+        if [ -n "${GITLAB_USER_FILE}" ] && [ -f "${GITLAB_USER_FILE}" ]; then
+            rm -f "${GITLAB_USER_FILE}"
+        fi
     }
     main_script() {
         set -e
@@ -56,6 +65,9 @@ run:
         GH_BINARY=""
         MARKDOWN_FILE=""
         JSON_PAYLOAD_FILE=""
+        GITLAB_NOTES_PAGE_FILE=""
+        GITLAB_FALLBACK_BODY_FILE=""
+        GITLAB_USER_FILE=""
         ORIGINAL_DIR=$(pwd)
 
     # Export API key as environment variable
@@ -371,7 +383,12 @@ run:
 
                 case "${comment_provider}" in
                     gitlab)
-                        # GitLab merge request
+                        # GitLab merge request — update existing Overmind note when possible
+                        OVERMIND_MARKER='<!-- overmind-change-summary -->'
+                        if ! grep -qF "${OVERMIND_MARKER}" "${MARKDOWN_FILE}"; then
+                            echo "Warning: Overmind markdown lacks ${OVERMIND_MARKER}; appending it so this plugin can find and update this MR comment on future runs."
+                            printf '\n\n%s\n' "${OVERMIND_MARKER}" >> "${MARKDOWN_FILE}"
+                        fi
 
                         # Fall back to ENV0_TEMPLATE_REPOSITORY for self-hosted GitLab
                         # where ENV0_PR_SOURCE_REPOSITORY is not available
@@ -420,27 +437,126 @@ run:
                         MR_IID="${ENV0_PR_NUMBER}"
                         API_URL="${GITLAB_BASE_URL}/api/v4/projects/${PROJECT_PATH_ENCODED}/merge_requests/${MR_IID}/notes"
 
+                        GITLAB_USER_FILE=$(mktemp)
+                        if ! curl -fsSL \
+                            -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                            "${GITLAB_BASE_URL}/api/v4/user" \
+                            -o "${GITLAB_USER_FILE}"; then
+                            echo "Error: GitLab GET /api/v4/user failed (check token and ${GITLAB_BASE_URL})"
+                            rm -f "${GITLAB_USER_FILE}"
+                            GITLAB_USER_FILE=""
+                            exit 1
+                        fi
+                        if ! GITLAB_USER_ID=$(jq -e -r '.id' "${GITLAB_USER_FILE}"); then
+                            echo "Error: GitLab /user response missing id (bad token or wrong API URL?)"
+                            rm -f "${GITLAB_USER_FILE}"
+                            GITLAB_USER_FILE=""
+                            exit 1
+                        fi
+                        rm -f "${GITLAB_USER_FILE}"
+                        GITLAB_USER_FILE=""
+
                         echo "Posting simulation results to GitLab MR ${PROJECT_PATH}!${MR_IID}..."
 
-                        # Create JSON payload file using jq
-                        JSON_PAYLOAD_FILE=$(mktemp)
-                        jq -n --rawfile body "${MARKDOWN_FILE}" '{body: $body}' > "${JSON_PAYLOAD_FILE}"
+                        page=1
+                        per_page=100
+                        NOTE_ID=""
+                        while true; do
+                            GITLAB_NOTES_PAGE_FILE=$(mktemp)
+                            http_notes=$(curl -sS -o "${GITLAB_NOTES_PAGE_FILE}" -w "%{http_code}" \
+                                -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                                "${API_URL}?per_page=${per_page}&page=${page}&sort=desc&order_by=created_at")
+                            if [ "${http_notes}" != "200" ]; then
+                                echo "Error: Failed to list GitLab MR notes (HTTP ${http_notes})"
+                                rm -f "${GITLAB_NOTES_PAGE_FILE}"
+                                GITLAB_NOTES_PAGE_FILE=""
+                                exit 1
+                            fi
+                            MATCH_ID=$(jq -r \
+                                --argjson uid "${GITLAB_USER_ID}" \
+                                --arg marker "${OVERMIND_MARKER}" \
+                                '[.[] | select(.system == false and .author.id == $uid and (.body | type == "string") and (.body | contains($marker)))] | if length > 0 then .[0].id | tostring else empty end' \
+                                "${GITLAB_NOTES_PAGE_FILE}")
+                            notes_count=$(jq 'length' "${GITLAB_NOTES_PAGE_FILE}")
+                            rm -f "${GITLAB_NOTES_PAGE_FILE}"
+                            GITLAB_NOTES_PAGE_FILE=""
 
-                        # Post comment using curl
-                        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                            -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-                            -H "Content-Type: application/json" \
-                            --data-binary "@${JSON_PAYLOAD_FILE}" \
-                            "${API_URL}")
+                            if [ -n "${MATCH_ID}" ]; then
+                                NOTE_ID="${MATCH_ID}"
+                                break
+                            fi
+                            if [ "${notes_count}" -eq 0 ]; then
+                                break
+                            fi
+                            if [ "${notes_count}" -lt "${per_page}" ]; then
+                                break
+                            fi
+                            page=$((page + 1))
+                        done
 
-                        # Clean up JSON payload file
-                        rm -f "${JSON_PAYLOAD_FILE}"
+                        gitlab_post_json_body() {
+                            _target_file="$1"
+                            jq -n --rawfile body "${MARKDOWN_FILE}" '{body: $body}' > "${_target_file}"
+                        }
 
-                        if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
-                            echo "✓ Simulation results posted to GitLab MR"
+                        gitlab_post_fallback_note() {
+                            put_code="$1"
+                            echo "Warning: Could not update GitLab MR note ${NOTE_ID} (HTTP ${put_code}); posting a new comment with an explanatory banner."
+                            GITLAB_FALLBACK_BODY_FILE=$(mktemp)
+                            {
+                                printf '%s\n\n' "Overmind env0 plugin: could not update existing MR note (HTTP ${put_code}). A new comment was posted below; you may remove duplicate threads manually."
+                                cat "${MARKDOWN_FILE}"
+                            } > "${GITLAB_FALLBACK_BODY_FILE}"
+                            JSON_PAYLOAD_FILE=$(mktemp)
+                            jq -n --rawfile body "${GITLAB_FALLBACK_BODY_FILE}" '{body: $body}' > "${JSON_PAYLOAD_FILE}"
+                            rm -f "${GITLAB_FALLBACK_BODY_FILE}"
+                            GITLAB_FALLBACK_BODY_FILE=""
+                            HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
+                                -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                                -H "Content-Type: application/json" \
+                                --data-binary "@${JSON_PAYLOAD_FILE}" \
+                                "${API_URL}")
+                            rm -f "${JSON_PAYLOAD_FILE}"
+                            JSON_PAYLOAD_FILE=""
+                            if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+                                echo "✓ Simulation results posted to GitLab MR (fallback after failed update)"
+                            else
+                                echo "Error: Failed to post fallback comment to GitLab MR (HTTP ${HTTP_CODE})"
+                                exit 1
+                            fi
+                        }
+
+                        if [ -n "${NOTE_ID}" ]; then
+                            JSON_PAYLOAD_FILE=$(mktemp)
+                            gitlab_post_json_body "${JSON_PAYLOAD_FILE}"
+                            put_code=$(curl -sS -o /dev/null -w "%{http_code}" -X PUT \
+                                -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                                -H "Content-Type: application/json" \
+                                --data-binary "@${JSON_PAYLOAD_FILE}" \
+                                "${API_URL}/${NOTE_ID}")
+                            rm -f "${JSON_PAYLOAD_FILE}"
+                            JSON_PAYLOAD_FILE=""
+                            if [ "${put_code}" -ge 200 ] && [ "${put_code}" -lt 300 ]; then
+                                echo "✓ Simulation results updated on GitLab MR (note ${NOTE_ID})"
+                            else
+                                gitlab_post_fallback_note "${put_code}"
+                            fi
                         else
-                            echo "Error: Failed to post comment to GitLab MR (HTTP ${HTTP_CODE})"
-                            exit 1
+                            JSON_PAYLOAD_FILE=$(mktemp)
+                            gitlab_post_json_body "${JSON_PAYLOAD_FILE}"
+                            HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
+                                -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                                -H "Content-Type: application/json" \
+                                --data-binary "@${JSON_PAYLOAD_FILE}" \
+                                "${API_URL}")
+                            rm -f "${JSON_PAYLOAD_FILE}"
+                            JSON_PAYLOAD_FILE=""
+                            if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+                                echo "✓ Simulation results posted to GitLab MR"
+                            else
+                                echo "Error: Failed to post comment to GitLab MR (HTTP ${HTTP_CODE})"
+                                exit 1
+                            fi
                         fi
                         ;;
                     github)

@@ -141,11 +141,15 @@ deploy:
             comment_provider: gitlab
 ```
 
+On GitLab, the plugin **updates** the merge-request comment on each run instead of adding a new comment every time (see [GitLab MR comments](#gitlab-merge-request-comments) below). On GitHub, each run still adds a **new** PR comment via `gh pr comment`; update-in-place for GitHub is not implemented in this plugin yet.
+
 ### Self-Hosted GitLab
 
 For self-hosted GitLab environments where `ENV0_PR_SOURCE_REPOSITORY` is not available, the plugin falls back to `ENV0_TEMPLATE_REPOSITORY` to derive the GitLab API URL for posting merge request comments.
 
-For authentication, the plugin uses `GITLAB_TOKEN` if set, otherwise falls back to `ENV0_VCS_ACCESS_TOKEN`. The token must have the GitLab `api` scope to post MR comments.
+For authentication, the plugin uses `GITLAB_TOKEN` if set, otherwise falls back to `ENV0_VCS_ACCESS_TOKEN`.
+
+**GitLab token scopes:** The plugin calls `GET /api/v4/user` (needs **`read_user`**, or a broader scope that includes it) and lists/creates/updates merge request notes (needs **`api`** or equivalent project access with comment permissions). A classic personal access token with the **`api`** scope satisfies both. Narrower token setups must include at least `read_user` plus whatever GitLab requires for MR note read/write on your instance.
 
 ```yaml
 version: 2
@@ -228,7 +232,7 @@ deploy:
    - `submit-plan`: Uses `$ENV0_TF_PLAN_JSON` to submit the Terraform plan
    - `start-change`: Marks the beginning of a change with a ticket link to the env0 deployment
    - `end-change`: Marks the completion of a change with a ticket link to the env0 deployment
-   - `wait-for-simulation`: Retrieves Overmind simulation results as Markdown and (when `post_comment=true`) posts them to the GitHub PR or GitLab MR (automatically detected based on repository URL)
+   - `wait-for-simulation`: Retrieves Overmind simulation results as Markdown and (when `post_comment=true`) posts them to the GitHub PR or GitLab MR per `comment_provider` (GitLab updates the comment in place).
 
 4. **Ticket Links**: When `ENV0_PR_NUMBER` is set (i.e., the deployment is triggered by a PR/MR), the plugin constructs a stable merge request URL from `ENV0_PR_SOURCE_REPOSITORY` (or `ENV0_TEMPLATE_REPOSITORY` as a fallback) and `ENV0_PR_NUMBER`. This ensures multiple plans for the same MR update the same Overmind change. For non-PR deployments, the ticket link falls back to the env0 deployment URL.
 
@@ -252,7 +256,7 @@ deploy:
   - `source:write`
 
 - GitHub authentication for the CLI when `wait-for-simulation` posts to GitHub (set `GH_TOKEN`).
-- GitLab authentication when `wait-for-simulation` posts to GitLab (set `GITLAB_TOKEN`, or rely on `ENV0_VCS_ACCESS_TOKEN` which is automatically available in self-hosted GitLab environments). The token must have the GitLab `api` scope.
+- GitLab authentication when `wait-for-simulation` posts to GitLab (set `GITLAB_TOKEN`, or rely on `ENV0_VCS_ACCESS_TOKEN` which is automatically available in self-hosted GitLab environments). See [Self-Hosted GitLab](#self-hosted-gitlab) for minimum scopes (`api` on a classic PAT is sufficient).
 
 ### Creating a `GH_TOKEN`
 
@@ -269,11 +273,24 @@ deploy:
 
 1. Sign in to GitLab and navigate to your user settings (or group/project settings for project/group tokens).
 2. Go to **Access Tokens** (or **Preferences** > **Access Tokens** for user tokens).
-3. Create a new token with the `api` scope (read/write is needed to comment on merge requests).
+3. Create a new token with the `api` scope (covers `GET /api/v4/user` and merge request note APIs used by this plugin).
 4. Generate the token and copy it immediately—GitLab will not show it again.
 5. Store the token securely in env0 (for example as an environment variable or secret) and expose it to the plugin as `GITLAB_TOKEN`.
 
 **Note**: When `post_comment=true`, you must set `comment_provider` to `github` or `gitlab`.
+
+### GitLab merge request comments
+
+To **update** the same MR note on each deployment, the plugin looks for a non-system note authored by the token’s user whose body contains the HTML marker `<!-- overmind-change-summary -->`. Overmind’s default markdown includes this marker; if it is missing, the plugin **warns**, **appends** the marker to the posted body, and subsequent runs can match and update that note.
+
+### Pinning plugin version (rollback)
+
+env0 resolves `use: https://github.com/org/env0-plugin` to the default branch unless you pin a revision. To avoid picking up breaking changes—or to roll back after an upgrade—append **`@<ref>`** to the URL (tag, branch, or commit SHA), per [env0’s plugin documentation](https://docs.env0.com/docs/plugins):
+
+```yaml
+use: https://github.com/overmindtech/env0-plugin@v1.2.3
+# or: https://github.com/overmindtech/env0-plugin@abc1234deadbeef...
+```
 
 ## Notes
 
