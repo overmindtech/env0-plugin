@@ -21,6 +21,7 @@ The Overmind plugin installs the Overmind CLI (and GitHub CLI) and executes one 
 | `post_comment`     | Whether `wait-for-simulation` should post the Overmind markdown to GitHub PR or GitLab MR. Defaults to `true` when running against a PR/MR, otherwise `false`. When `true`, `comment_provider` must be set. | No       |
 | `comment_provider` | Where `wait-for-simulation` should post comments when `post_comment=true`. Must be one of: `github`, `gitlab`.                                                                                              | No       |
 | `on_failure`       | Behavior when the plugin step errors. `fail` (default) fails the step and blocks the deployment; `pass` allows the deployment to continue even if this step errors. Must be one of: `fail`, `pass`.         | No       |
+| `skip_after_approval` | When `true` (default), `submit-plan` exits early once a deployment has been approved (`ENV0_REVIEWER_NAME` is set), avoiding duplicate analysis from the post-approval re-plan. Set to `false` to submit on every plan. | No       |
 
 ## Usage
 
@@ -222,6 +223,8 @@ deploy:
             api_key: ${OVERMIND_API_KEY}
 ```
 
+> **Note:** By default, `submit-plan` runs only on the first plan (typically the PR/MR plan). The post-approval re-plan is automatically skipped to avoid duplicate Overmind analysis. Set `skip_after_approval: false` to submit on every plan.
+
 ## How It Works
 
 1. **Installation**: The plugin automatically installs the latest version of the Overmind CLI and GitHub CLI (for GitHub support) to a writable directory in your PATH. GitLab support uses `curl` which is typically available on most systems.
@@ -235,6 +238,8 @@ deploy:
    - `wait-for-simulation`: Retrieves Overmind simulation results as Markdown and (when `post_comment=true`) posts them to the GitHub PR or GitLab MR per `comment_provider` (GitLab updates the comment in place).
 
 4. **Ticket Links**: When `ENV0_PR_NUMBER` is set (i.e., the deployment is triggered by a PR/MR), the plugin constructs a stable merge request URL from `ENV0_PR_SOURCE_REPOSITORY` (or `ENV0_TEMPLATE_REPOSITORY` as a fallback) and `ENV0_PR_NUMBER`. This ensures multiple plans for the same MR update the same Overmind change. For non-PR deployments, the ticket link falls back to the env0 deployment URL.
+
+5. **Post-Approval Re-Plan Gating**: env0 always re-runs `terraformPlan` between approval and apply, even when the code hasn't changed. By default (`skip_after_approval: true`), the plugin detects this by checking `ENV0_REVIEWER_NAME` (set by env0 after a reviewer approves) and skips the redundant `submit-plan`. This avoids duplicate Overmind analysis and prevents `start-change` from waiting on a second analysis that no human will review. Set `skip_after_approval: false` if you need both submissions (e.g. auto-deploy environments with no prior PR plan).
 
 ## Requirements
 

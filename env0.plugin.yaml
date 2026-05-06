@@ -22,6 +22,9 @@ inputs:
   on_failure:
     description: "Behavior when an error occurs. 'fail' (default) fails the plugin step and blocks the deployment; 'pass' allows the deployment to continue even if this step errors."
     required: false
+  skip_after_approval:
+    description: "When true (default), submit-plan exits early once a deployment has been approved (ENV0_REVIEWER_NAME is set), avoiding wasted resubmission of the post-approval re-plan. Set to false to submit on every plan, including the apply pipeline's re-plan."
+    required: false
 run:
   exec: |
     #!/bin/sh
@@ -255,6 +258,16 @@ run:
     # Execute the appropriate action based on input
     case "${inputs.action}" in
         submit-plan)
+            _skip_after_approval="${inputs.skip_after_approval}"
+            _skip_after_approval=$(echo "${_skip_after_approval:-true}" | tr '[:upper:]' '[:lower:]')
+            case "${_skip_after_approval}" in
+                true|false) ;;
+                *) echo "Error: skip_after_approval must be 'true' or 'false'"; exit 1 ;;
+            esac
+            if [ "${_skip_after_approval}" = "true" ] && [ -n "${ENV0_REVIEWER_NAME}" ]; then
+                echo "Skipping submit-plan: deployment past approval (ENV0_REVIEWER_NAME=${ENV0_REVIEWER_NAME}). Set skip_after_approval=false to override."
+                exit 0
+            fi
             if [ -z "${ENV0_TF_PLAN_JSON}" ]; then
                 echo "Error: ENV0_TF_PLAN_JSON environment variable is not set"
                 exit 1
