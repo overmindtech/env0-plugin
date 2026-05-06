@@ -229,17 +229,67 @@ deploy:
 
 1. **Installation**: The plugin automatically installs the latest version of the Overmind CLI and GitHub CLI (for GitHub support) to a writable directory in your PATH. GitLab support uses `curl` which is typically available on most systems.
 
-2. **Authentication**: The API key provided in the `api_key` input is set as the `OVERMIND_API_KEY` environment variable.
+2. **Supply-chain verification**: Every binary the plugin downloads is cryptographically verified against the producer workflow's GitHub Artifact Attestation (SLSA build provenance v1) before it is executed. See [Supply-chain verification](#supply-chain-verification) below.
 
-3. **Action Execution**: Based on the `action` input, the plugin executes the corresponding Overmind/GitHub/GitLab workflow:
+3. **Authentication**: The API key provided in the `api_key` input is set as the `OVERMIND_API_KEY` environment variable.
+
+4. **Action Execution**: Based on the `action` input, the plugin executes the corresponding Overmind/GitHub/GitLab workflow:
    - `submit-plan`: Uses `$ENV0_TF_PLAN_JSON` to submit the Terraform plan
    - `start-change`: Marks the beginning of a change with a ticket link to the env0 deployment
    - `end-change`: Marks the completion of a change with a ticket link to the env0 deployment
    - `wait-for-simulation`: Retrieves Overmind simulation results as Markdown and (when `post_comment=true`) posts them to the GitHub PR or GitLab MR per `comment_provider` (GitLab updates the comment in place).
 
-4. **Ticket Links**: When `ENV0_PR_NUMBER` is set (i.e., the deployment is triggered by a PR/MR), the plugin constructs a stable merge request URL from `ENV0_PR_SOURCE_REPOSITORY` (or `ENV0_TEMPLATE_REPOSITORY` as a fallback) and `ENV0_PR_NUMBER`. This ensures multiple plans for the same MR update the same Overmind change. For non-PR deployments, the ticket link falls back to the env0 deployment URL.
+5. **Ticket Links**: When `ENV0_PR_NUMBER` is set (i.e., the deployment is triggered by a PR/MR), the plugin constructs a stable merge request URL from `ENV0_PR_SOURCE_REPOSITORY` (or `ENV0_TEMPLATE_REPOSITORY` as a fallback) and `ENV0_PR_NUMBER`. This ensures multiple plans for the same MR update the same Overmind change. For non-PR deployments, the ticket link falls back to the env0 deployment URL.
 
-5. **Post-Approval Re-Plan Gating**: env0 always re-runs `terraformPlan` between approval and apply, even when the code hasn't changed. By default (`skip_after_approval: true`), the plugin detects this by checking `ENV0_REVIEWER_NAME` (set by env0 after a reviewer approves) and skips the redundant `submit-plan`. This avoids duplicate Overmind analysis and prevents `start-change` from waiting on a second analysis that no human will review. Set `skip_after_approval: false` if you need both submissions (e.g. auto-deploy environments with no prior PR plan).
+6. **Post-Approval Re-Plan Gating**: env0 always re-runs `terraformPlan` between approval and apply, even when the code hasn't changed. By default (`skip_after_approval: true`), the plugin detects this by checking `ENV0_REVIEWER_NAME` (set by env0 after a reviewer approves) and skips the redundant `submit-plan`. This avoids duplicate Overmind analysis and prevents `start-change` from waiting on a second analysis that no human will review. Set `skip_after_approval: false` if you need both submissions (e.g. auto-deploy environments with no prior PR plan).
+
+## Supply-chain verification
+
+The plugin downloads two binaries from public GitHub Releases at runtime — the Overmind CLI from [`overmindtech/cli`](https://github.com/overmindtech/cli) and (only for `wait-for-simulation` with `comment_provider: github`) the GitHub CLI from [`cli/cli`](https://github.com/cli/cli). Both releases publish [GitHub Artifact Attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) carrying [SLSA build provenance v1](https://slsa.dev/spec/v1.0/provenance). The plugin verifies the attestation of each archive **before** extracting and executing the binary inside it.
+
+### What the plugin checks
+
+For every downloaded archive:
+
+- The archive's SHA-256 digest is signed by Sigstore's public-good infrastructure (Fulcio cert + Rekor transparency log).
+- The signing certificate's Subject Alternative Name matches `https://github.com/<owner>/<repo>/.github/workflows/release.yml@refs/tags/v*`. This binds the artifact to the producer workflow in the producer repository, so a release built from a fork (or from any other workflow file) fails verification.
+- The OIDC issuer is `https://token.actions.githubusercontent.com`. This binds the workflow to a real GitHub Actions run.
+
+Specifically, the producer identities pinned by the plugin are:
+
+| Archive            | Repo               | Signer workflow                       |
+|--------------------|--------------------|---------------------------------------|
+| Overmind CLI       | `overmindtech/cli` | `.github/workflows/release.yml` on a `v*` tag |
+| GitHub CLI (`gh`)  | `cli/cli`          | `.github/workflows/release.yml` on a `v*` tag |
+
+### Verification path
+
+The plugin tries the cheaper path first and falls back to the heavier one only when needed:
+
+1. **`gh attestation verify` (preferred)** — if `gh` is already on `PATH` and supports `attestation verify` (GitHub CLI 2.49+), the plugin runs a single `gh attestation verify <archive> --repo <owner>/<repo> --signer-workflow <owner>/<repo>/.github/workflows/release.yml --cert-oidc-issuer https://token.actions.githubusercontent.com` and is done. No new binaries are introduced on the runner.
+2. **`cosign` fallback** — if `gh` is missing or too old, the plugin downloads a pinned version of [Sigstore `cosign`](https://github.com/sigstore/cosign), checks it against a pinned SHA-256 (the bootstrap trust anchor; bumped via Renovate), fetches the attestation bundle from `https://api.github.com/repos/<owner>/<repo>/attestations/sha256:<digest>`, and verifies it with `cosign verify-blob-attestation --new-bundle-format ...` against the same signer-workflow identity.
+
+The cosign fallback works on Linux/Darwin amd64+arm64 and Windows amd64 (the platforms cosign publishes binaries for). On other platforms (e.g. Linux i386), the plugin requires `gh` 2.49+ to be pre-installed on the runner and fails loudly otherwise.
+
+### Network requirements
+
+For verification to succeed, the env0 runner needs outbound HTTPS to:
+
+- `api.github.com` (attestation index, GitHub CLI release metadata)
+- `github.com` and `objects.githubusercontent.com` (release archive + cosign download)
+- `tuf-repo-cdn.sigstore.dev` and `rekor.sigstore.dev` (Sigstore trust root + transparency log)
+
+Setting `GH_TOKEN` (or `GITHUB_TOKEN`) raises GitHub API rate limits but is not required for verification of public-repo attestations.
+
+### Failure mode
+
+A verification failure causes the plugin to exit non-zero with a clear error message and the binary is **never** executed. **`on_failure: pass` does not bypass this** — it is reserved for runtime / API errors (e.g. Overmind unreachable), not supply-chain failures. The exit code reserved for supply-chain failures is `99`.
+
+If you see a verification failure on a clean runner, the most common causes are:
+
+1. The runner cannot reach the Sigstore endpoints listed above.
+2. A new Overmind CLI release has been published without attestations (regression on the producer side — please file an issue).
+3. The cosign SHA-256 pin in the plugin is stale relative to the cosign version it tries to download (Renovate is responsible for keeping these in sync; manual fix is `sh scripts/update-cosign-pins.sh` after bumping `COSIGN_VERSION`).
 
 ## Requirements
 

@@ -2,5 +2,26 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>overmindtech/renovate-config"
-  ]
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Bump pinned cosign version used by env0.plugin.yaml supply-chain verification. After Renovate updates COSIGN_VERSION, run scripts/update-cosign-pins.sh (or wire it as a postUpgradeTask) to refresh the per-platform SHA256 digests atomically.",
+      "fileMatch": ["^env0\\.plugin\\.yaml$"],
+      "matchStrings": [
+        "# renovate: datasource=github-releases depName=sigstore/cosign\\s*\\n\\s*COSIGN_VERSION=\"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "sigstore/cosign"
+    }
+  ],
+  "postUpgradeTasks": {
+    "commands": [
+      "scripts/update-cosign-pins.sh"
+    ],
+    "fileFilters": [
+      "env0.plugin.yaml"
+    ],
+    "executionMode": "update"
+  }
 }
