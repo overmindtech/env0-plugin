@@ -188,18 +188,34 @@ run:
         _vc_api_url="https://api.github.com/repos/${_vc_repo}/attestations/sha256:${_vc_digest}"
         _vc_gh_token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
         echo "Fetching attestation bundle for ${_vc_repo} sha256:${_vc_digest}..."
+        # Try authenticated first (raises rate limits) but fall back to
+        # unauthenticated on 401/403. env0 runners often expose a fine-grained
+        # PAT scoped only to the customer's own repos, which would 401 here;
+        # the attestations endpoint is publicly readable for public repos and
+        # the actual trust boundary is the cosign verify step below.
+        _vc_authed_ok=0
         if [ -n "${_vc_gh_token}" ]; then
-            if ! curl -fsSL \
+            _vc_http=$(curl -sSL -o "${_vc_response}" -w '%{http_code}' \
                 -H "Authorization: Bearer ${_vc_gh_token}" \
+                -H "Accept: application/vnd.github+json" \
+                "${_vc_api_url}" || echo "000")
+            case "${_vc_http}" in
+                200)
+                    _vc_authed_ok=1
+                    ;;
+                401|403)
+                    echo "  GH_TOKEN/GITHUB_TOKEN was rejected (HTTP ${_vc_http}); retrying without auth since attestations on public repos are publicly readable." >&2
+                    ;;
+                *)
+                    attestation_fail "Failed to fetch attestation bundle from ${_vc_api_url} (HTTP ${_vc_http})"
+                    ;;
+            esac
+        fi
+        if [ "${_vc_authed_ok}" -eq 0 ]; then
+            if ! curl -fsSL \
                 -H "Accept: application/vnd.github+json" \
                 "${_vc_api_url}" -o "${_vc_response}"; then
                 attestation_fail "Failed to fetch attestation bundle from ${_vc_api_url}"
-            fi
-        else
-            if ! curl -fsSL \
-                -H "Accept: application/vnd.github+json" \
-                "${_vc_api_url}" -o "${_vc_response}"; then
-                attestation_fail "Failed to fetch attestation bundle from ${_vc_api_url} (set GH_TOKEN to raise rate limits)"
             fi
         fi
         if ! jq -e '.attestations | length > 0' "${_vc_response}" >/dev/null 2>&1; then

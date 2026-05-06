@@ -163,7 +163,7 @@ host_has_cosign() {
     esac
 }
 
-note "1/7 gh happy path — Overmind CLI archive verifies via gh"
+note "1/8 gh happy path — Overmind CLI archive verifies via gh"
 if command -v gh >/dev/null 2>&1; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t1-archive"
     run_verify "${SHARED_DIR}/t1-archive" "overmindtech/cli" ".github/workflows/release.yml" default || rc=$?
@@ -174,7 +174,7 @@ else
     echo "  SKIP: gh not on PATH"
 fi
 
-note "2/7 cosign fallback — Overmind CLI archive verifies via cosign when gh absent"
+note "2/8 cosign fallback — Overmind CLI archive verifies via cosign when gh absent"
 if host_has_cosign; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t2-archive"
     run_verify "${SHARED_DIR}/t2-archive" "overmindtech/cli" ".github/workflows/release.yml" no-gh || rc=$?
@@ -185,7 +185,7 @@ else
     echo "  SKIP: no published cosign binary for ${host_os}/${host_arch}"
 fi
 
-note "3/7 tamper detection — flipped byte must fail (gh path)"
+note "3/8 tamper detection — flipped byte must fail (gh path)"
 if command -v gh >/dev/null 2>&1; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t3-archive"
     printf '\x00' >> "${SHARED_DIR}/t3-archive"
@@ -197,7 +197,7 @@ else
     echo "  SKIP: gh not on PATH"
 fi
 
-note "4/7 tamper detection — flipped byte must fail (cosign path)"
+note "4/8 tamper detection — flipped byte must fail (cosign path)"
 if host_has_cosign; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t4-archive"
     printf '\x00' >> "${SHARED_DIR}/t4-archive"
@@ -209,7 +209,7 @@ else
     echo "  SKIP: no published cosign binary for ${host_os}/${host_arch}"
 fi
 
-note "5/7 wrong signer-workflow — fake workflow path must fail"
+note "5/8 wrong signer-workflow — fake workflow path must fail"
 if command -v gh >/dev/null 2>&1; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t5-archive"
     run_verify "${SHARED_DIR}/t5-archive" "overmindtech/cli" ".github/workflows/notreal.yml" default || rc=$?
@@ -220,7 +220,7 @@ else
     echo "  SKIP: gh not on PATH"
 fi
 
-note "6/7 wrong repo — verifying cli/cli archive as overmindtech/cli must fail"
+note "6/8 wrong repo — verifying cli/cli archive as overmindtech/cli must fail"
 if command -v gh >/dev/null 2>&1; then
     cp "${SHARED_DIR}/gh-archive" "${SHARED_DIR}/t6-archive"
     run_verify "${SHARED_DIR}/t6-archive" "overmindtech/cli" ".github/workflows/release.yml" default || rc=$?
@@ -231,12 +231,33 @@ else
     echo "  SKIP: gh not on PATH"
 fi
 
-note "7/7 missing attestation — random fixture has no attestation, must fail (cosign path)"
+note "7/8 missing attestation — random fixture has no attestation, must fail (cosign path)"
 if host_has_cosign; then
     cp "${SHARED_DIR}/random-fixture" "${SHARED_DIR}/t7-archive"
     run_verify "${SHARED_DIR}/t7-archive" "overmindtech/cli" ".github/workflows/release.yml" no-gh || rc=$?
     rc=${rc:-0}
     assert_rc 99 "${rc}" "missing attestation (cosign)"
+    unset rc
+else
+    echo "  SKIP: no published cosign binary for ${host_os}/${host_arch}"
+fi
+
+note "8/8 GH_TOKEN rejected (401) — must fall back to unauth and still verify (cosign path)"
+# Reproduces the env0 runner case where a fine-grained PAT scoped only to the
+# customer's own repos is in the environment as GH_TOKEN. The attestations
+# endpoint returns 401 for the bad bearer; we must retry without auth.
+if host_has_cosign; then
+    cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t8-archive"
+    set +e
+    PATH="${NO_GH_PATH}" \
+        OS="${host_os}" \
+        ARCH="${host_arch}" \
+        GH_TOKEN="ghp_definitely_not_a_real_token_xxxxxxxxxxxxxxxxxxxx" \
+        sh -c '. "$1"; verify_attestation "$2" "$3" "$4"' \
+        _ "${EXTRACTED}" "${SHARED_DIR}/t8-archive" "overmindtech/cli" ".github/workflows/release.yml"
+    rc=$?
+    set -e
+    assert_rc 0 "${rc}" "bad GH_TOKEN falls back to unauth and verifies"
     unset rc
 else
     echo "  SKIP: no published cosign binary for ${host_os}/${host_arch}"
