@@ -25,6 +25,24 @@ inputs:
   skip_after_approval:
     description: "When true (default), submit-plan exits early once a deployment has been approved (ENV0_REVIEWER_NAME is set), avoiding wasted resubmission of the post-approval re-plan. Set to false to submit on every plan, including the apply pipeline's re-plan."
     required: false
+  timeout:
+    description: "Wall-clock time limit for the entire Overmind CLI invocation after login, including any polling for analysis or snapshot completion (e.g. '45m'). Accepts any Go duration string. Defaults to the CLI default of 31m. Must be longer than the expected analysis time; the 30-minute service hard cap on analysis is separate from this value."
+    required: false
+  change_analysis_target_duration:
+    description: "Soft server-side target duration for change analysis planning used with submit-plan (e.g. '5m', '20m'). The blast-radius phase uses 67% of this value; the remaining 33% covers hypothesis formation. Valid range: 1m–30m. Defaults to account-level settings."
+    required: false
+  blast_radius_link_depth:
+    description: "How many relationship levels deep to traverse when calculating the blast radius (used with submit-plan). Larger values give a more complete picture but take longer. Defaults to account-level settings."
+    required: false
+  blast_radius_max_items:
+    description: "Maximum number of resources to include in the blast radius calculation (used with submit-plan). Larger values give a more complete picture but take longer. Defaults to account-level settings."
+    required: false
+  risk_levels:
+    description: "Comma-separated list of risk severities to include in the wait-for-simulation output (e.g. 'high,medium'). Allowed values: high, medium, low. Defaults to all three."
+    required: false
+  wait_for_snapshot:
+    description: "When true, start-change blocks until the pre-change snapshot is fully captured before returning. Defaults to false (snapshot runs in background)."
+    required: false
 run:
   exec: |
     #!/bin/sh
@@ -530,6 +548,18 @@ run:
             if [ -n "${DIFF_FILE}" ]; then
                 set -- "$@" --code-changes-diff "${DIFF_FILE}"
             fi
+            if [ -n "${inputs.change_analysis_target_duration}" ]; then
+                set -- "$@" --change-analysis-target-duration "${inputs.change_analysis_target_duration}"
+            fi
+            if [ -n "${inputs.blast_radius_link_depth}" ]; then
+                set -- "$@" --blast-radius-link-depth "${inputs.blast_radius_link_depth}"
+            fi
+            if [ -n "${inputs.blast_radius_max_items}" ]; then
+                set -- "$@" --blast-radius-max-items "${inputs.blast_radius_max_items}"
+            fi
+            if [ -n "${inputs.timeout}" ]; then
+                set -- "$@" --timeout "${inputs.timeout}"
+            fi
             "$@"
 
             # Clean up diff file if created
@@ -539,13 +569,30 @@ run:
             ;;
         start-change)
             echo "Starting change in Overmind..."
-            "${INSTALL_DIR}/overmind" changes start-change \
+            set -- "${INSTALL_DIR}/overmind" changes start-change \
                 --ticket-link "${ticket_link}"
+            if [ -n "${inputs.app}" ]; then
+                set -- "$@" --app "${inputs.app}"
+            fi
+            if [ "${inputs.wait_for_snapshot}" = "true" ]; then
+                set -- "$@" --wait-for-snapshot
+            fi
+            if [ -n "${inputs.timeout}" ]; then
+                set -- "$@" --timeout "${inputs.timeout}"
+            fi
+            "$@"
             ;;
         end-change)
             echo "Ending change in Overmind..."
-            "${INSTALL_DIR}/overmind" changes end-change \
+            set -- "${INSTALL_DIR}/overmind" changes end-change \
                 --ticket-link "${ticket_link}"
+            if [ -n "${inputs.app}" ]; then
+                set -- "$@" --app "${inputs.app}"
+            fi
+            if [ -n "${inputs.timeout}" ]; then
+                set -- "$@" --timeout "${inputs.timeout}"
+            fi
+            "$@"
             ;;
         wait-for-simulation)
             echo "Waiting for Overmind simulation and commenting on PR/MR..."
@@ -573,6 +620,12 @@ run:
                 --format markdown
             if [ -n "${inputs.app}" ]; then
                 set -- "$@" --app "${inputs.app}"
+            fi
+            if [ -n "${inputs.risk_levels}" ]; then
+                set -- "$@" --risk-levels "${inputs.risk_levels}"
+            fi
+            if [ -n "${inputs.timeout}" ]; then
+                set -- "$@" --timeout "${inputs.timeout}"
             fi
             if ! "$@" > "${MARKDOWN_FILE}"; then
                 echo "Error: Failed to retrieve change markdown from Overmind"

@@ -22,6 +22,12 @@ The Overmind plugin installs the Overmind CLI (and GitHub CLI) and executes one 
 | `comment_provider` | Where `wait-for-simulation` should post comments when `post_comment=true`. Must be one of: `github`, `gitlab`.                                                                                              | No       |
 | `on_failure`       | Behavior when the plugin step errors. `fail` (default) fails the step and blocks the deployment; `pass` allows the deployment to continue even if this step errors. Must be one of: `fail`, `pass`.         | No       |
 | `skip_after_approval` | When `true` (default), `submit-plan` exits early once a deployment has been approved (`ENV0_REVIEWER_NAME` is set), avoiding duplicate analysis from the post-approval re-plan. Set to `false` to submit on every plan. | No       |
+| `timeout` | Wall-clock time limit for the entire Overmind CLI invocation after login, including any polling for analysis or snapshot completion (e.g. `45m`). Accepts any Go duration string. Defaults to the CLI default of `31m`. Must be longer than the expected analysis time; the 30-minute service hard cap on analysis is separate from this value. Applies to all actions. | No       |
+| `change_analysis_target_duration` | Soft server-side target duration for change analysis planning used with `submit-plan` (e.g. `5m`, `20m`). The blast-radius phase uses 67% of this value; the remaining 33% covers hypothesis formation. Valid range: `1m`–`30m`. Defaults to account-level settings. | No       |
+| `blast_radius_link_depth` | How many relationship levels deep to traverse when calculating the blast radius (used with `submit-plan`). Larger values give a more complete picture but take longer. Defaults to account-level settings. | No       |
+| `blast_radius_max_items` | Maximum number of resources to include in the blast radius calculation (used with `submit-plan`). Larger values give a more complete picture but take longer. Defaults to account-level settings. | No       |
+| `risk_levels` | Comma-separated list of risk severities to include in the `wait-for-simulation` output (e.g. `high,medium`). Allowed values: `high`, `medium`, `low`. Defaults to all three. | No       |
+| `wait_for_snapshot` | When `true`, `start-change` blocks until the pre-change snapshot is fully captured before returning. Defaults to `false` (snapshot runs in background). | No       |
 
 ## Usage
 
@@ -191,6 +197,53 @@ By default, if the plugin step fails (e.g. Overmind API error, missing env var, 
 ```
 
 Use `on_failure: pass` when the Overmind integration is optional and you do not want plugin failures to block deployments.
+
+### Tuning Analysis
+
+For large or complex infrastructure, you can tune how deep and how long the blast-radius analysis runs using three optional `submit-plan` inputs. These map directly to the corresponding Overmind CLI flags; see the [Overmind CLI configuration docs](https://docs.overmind.tech/cli/configuration) for full details.
+
+```yaml
+version: 2
+deploy:
+  steps:
+    terraformPlan:
+      after:
+        - name: Submit Plan to Overmind
+          use: https://github.com/overmindtech/env0-plugin
+          inputs:
+            action: submit-plan
+            api_key: ${OVERMIND_API_KEY}
+            timeout: 45m                         # wall-clock limit for the CLI invocation
+            change_analysis_target_duration: 15m # server-side analysis budget (1m–30m)
+            blast_radius_link_depth: 4           # relationship levels to traverse
+            blast_radius_max_items: 500          # max resources in blast radius
+```
+
+To limit which risk severities appear in the PR/MR comment, use `risk_levels` on `wait-for-simulation`:
+
+```yaml
+        - name: Post Overmind Simulation
+          use: https://github.com/overmindtech/env0-plugin
+          inputs:
+            action: wait-for-simulation
+            api_key: ${OVERMIND_API_KEY}
+            post_comment: true
+            comment_provider: github
+            risk_levels: high,medium # omit low-severity risks from the comment
+```
+
+To block `start-change` until the pre-change snapshot is fully captured before the apply proceeds:
+
+```yaml
+    terraformApply:
+      before:
+        - name: Mark Change Started
+          use: https://github.com/overmindtech/env0-plugin
+          inputs:
+            action: start-change
+            api_key: ${OVERMIND_API_KEY}
+            wait_for_snapshot: true
+```
 
 ### Complete Example
 
