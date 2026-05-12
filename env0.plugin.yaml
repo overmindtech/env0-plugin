@@ -574,7 +574,7 @@ run:
             if [ -n "${inputs.app}" ]; then
                 set -- "$@" --app "${inputs.app}"
             fi
-            if [ "${inputs.wait_for_snapshot}" = "true" ]; then
+            if [ "$(echo "${inputs.wait_for_snapshot}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
                 set -- "$@" --wait-for-snapshot
             fi
             if [ -n "${inputs.timeout}" ]; then
