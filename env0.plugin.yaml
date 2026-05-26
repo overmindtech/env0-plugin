@@ -130,6 +130,17 @@ run:
         fi
     }
 
+    # Extract the value of an HTTP response header from a curl -D dump file.
+    # Case-insensitive; returns the last occurrence (handles redirects) with
+    # CR/LF stripped. Empty output if the header is absent.
+    extract_header_value() {
+        _ehv_file="$1"; _ehv_name="$2"
+        grep -i "^${_ehv_name}:" "${_ehv_file}" 2>/dev/null \
+            | tail -n 1 \
+            | awk '{print $2}' \
+            | tr -d '\r\n'
+    }
+
     cosign_platform_id() {
         case "${OS}_${ARCH}" in
             Linux_x86_64)   echo "linux_amd64" ;;
@@ -203,6 +214,7 @@ run:
         fi
         _vc_bundle="${COSIGN_DIR}/bundle-${_vc_digest}.json"
         _vc_response="${COSIGN_DIR}/response-${_vc_digest}.json"
+        _vc_headers="${COSIGN_DIR}/headers-${_vc_digest}.txt"
         _vc_api_url="https://api.github.com/repos/${_vc_repo}/attestations/sha256:${_vc_digest}"
         _vc_gh_token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
         echo "Fetching attestation bundle for ${_vc_repo} sha256:${_vc_digest}..."
@@ -213,28 +225,63 @@ run:
         # the actual trust boundary is the cosign verify step below.
         _vc_authed_ok=0
         if [ -n "${_vc_gh_token}" ]; then
-            _vc_http=$(curl -sSL -o "${_vc_response}" -w '%{http_code}' \
+            _vc_http=$(curl -sSL -o "${_vc_response}" -D "${_vc_headers}" -w '%{http_code}' \
                 -H "Authorization: Bearer ${_vc_gh_token}" \
                 -H "Accept: application/vnd.github+json" \
                 "${_vc_api_url}" || echo "000")
+            _vc_msg=$(jq -r '.message // empty' "${_vc_response}" 2>/dev/null || true)
             case "${_vc_http}" in
                 200)
                     _vc_authed_ok=1
                     ;;
                 401|403)
-                    echo "  GH_TOKEN/GITHUB_TOKEN was rejected (HTTP ${_vc_http}); retrying without auth since attestations on public repos are publicly readable." >&2
+                    echo "  GH_TOKEN/GITHUB_TOKEN rejected by GitHub (HTTP ${_vc_http}): ${_vc_msg:-<no body>}. Retrying without auth since attestations on public repos are publicly readable." >&2
                     ;;
                 *)
-                    attestation_fail "Failed to fetch attestation bundle from ${_vc_api_url} (HTTP ${_vc_http})"
+                    attestation_fail "Failed to fetch attestation bundle from ${_vc_api_url} (HTTP ${_vc_http}). GitHub response: ${_vc_msg:-<no body>}"
                     ;;
             esac
         fi
         if [ "${_vc_authed_ok}" -eq 0 ]; then
-            if ! curl -fsSL \
-                -H "Accept: application/vnd.github+json" \
-                "${_vc_api_url}" -o "${_vc_response}"; then
-                attestation_fail "Failed to fetch attestation bundle from ${_vc_api_url}"
-            fi
+            # Unauthenticated fallback. GitHub's unauthenticated REST API limit
+            # is 60 requests/hour per IPv4, and env0's shared egress IPs
+            # exhaust that quickly. On rate-limit responses (HTTP 403/429 with
+            # X-RateLimit-Remaining=0) sleep up to X-RateLimit-Reset (bounded
+            # at 60s) and retry once before giving up. Capture status code +
+            # body via -D/-o so the failure surfaces GitHub's own "API rate
+            # limit exceeded for <ip>..." message instead of a bare curl 22.
+            _vc_attempt=1
+            _vc_max_attempts=2
+            _vc_max_wait=60
+            while :; do
+                _vc_http=$(curl -sSL -o "${_vc_response}" -D "${_vc_headers}" -w '%{http_code}' \
+                    -H "Accept: application/vnd.github+json" \
+                    "${_vc_api_url}" || echo "000")
+                if [ "${_vc_http}" = "200" ]; then
+                    break
+                fi
+                _vc_msg=$(jq -r '.message // empty' "${_vc_response}" 2>/dev/null || true)
+                if [ "${_vc_http}" = "403" ] || [ "${_vc_http}" = "429" ]; then
+                    _vc_remaining=$(extract_header_value "${_vc_headers}" 'x-ratelimit-remaining')
+                    _vc_reset=$(extract_header_value "${_vc_headers}" 'x-ratelimit-reset')
+                    _vc_now=$(date +%s 2>/dev/null || echo 0)
+                    _vc_wait=0
+                    if [ -n "${_vc_reset}" ] && [ "${_vc_reset}" -gt "${_vc_now}" ] 2>/dev/null; then
+                        _vc_wait=$((_vc_reset - _vc_now))
+                    fi
+                    if [ "${_vc_attempt}" -lt "${_vc_max_attempts}" ] \
+                       && [ "${_vc_remaining}" = "0" ] \
+                       && [ "${_vc_wait}" -gt 0 ] \
+                       && [ "${_vc_wait}" -le "${_vc_max_wait}" ]; then
+                        echo "  GitHub API rate-limit hit (HTTP ${_vc_http}; x-ratelimit-remaining=0). Sleeping ${_vc_wait}s until x-ratelimit-reset and retrying once." >&2
+                        sleep "${_vc_wait}"
+                        _vc_attempt=$((_vc_attempt + 1))
+                        continue
+                    fi
+                    attestation_fail "Failed to fetch attestation bundle from ${_vc_api_url} (HTTP ${_vc_http}). GitHub response: ${_vc_msg:-<no body>}. This is almost certainly GitHub's REST API rate limit. Unauthenticated requests are capped at 60/hour per IP, and env0's shared egress IPs hit that limit quickly. Set GH_TOKEN or GITHUB_TOKEN in your env0 environment to authenticate; a GitHub classic personal access token with NO scopes is sufficient and raises the limit to 5000/hour. See README 'Supply-chain verification' for setup details."
+                fi
+                attestation_fail "Failed to fetch attestation bundle from ${_vc_api_url} (HTTP ${_vc_http}). GitHub response: ${_vc_msg:-<no body>}"
+            done
         fi
         if ! jq -e '.attestations | length > 0' "${_vc_response}" >/dev/null 2>&1; then
             attestation_fail "No GitHub Artifact Attestations found for ${_vc_repo} digest sha256:${_vc_digest}. The producer release may not have been signed."

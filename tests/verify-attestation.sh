@@ -163,7 +163,7 @@ host_has_cosign() {
     esac
 }
 
-note "1/8 gh happy path — Overmind CLI archive verifies via gh"
+note "1/9 gh happy path — Overmind CLI archive verifies via gh"
 if command -v gh >/dev/null 2>&1; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t1-archive"
     run_verify "${SHARED_DIR}/t1-archive" "overmindtech/cli" ".github/workflows/release.yml" default || rc=$?
@@ -174,7 +174,7 @@ else
     echo "  SKIP: gh not on PATH"
 fi
 
-note "2/8 cosign fallback — Overmind CLI archive verifies via cosign when gh absent"
+note "2/9 cosign fallback — Overmind CLI archive verifies via cosign when gh absent"
 if host_has_cosign; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t2-archive"
     run_verify "${SHARED_DIR}/t2-archive" "overmindtech/cli" ".github/workflows/release.yml" no-gh || rc=$?
@@ -185,7 +185,7 @@ else
     echo "  SKIP: no published cosign binary for ${host_os}/${host_arch}"
 fi
 
-note "3/8 tamper detection — flipped byte must fail (gh path)"
+note "3/9 tamper detection — flipped byte must fail (gh path)"
 if command -v gh >/dev/null 2>&1; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t3-archive"
     printf '\x00' >> "${SHARED_DIR}/t3-archive"
@@ -197,7 +197,7 @@ else
     echo "  SKIP: gh not on PATH"
 fi
 
-note "4/8 tamper detection — flipped byte must fail (cosign path)"
+note "4/9 tamper detection — flipped byte must fail (cosign path)"
 if host_has_cosign; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t4-archive"
     printf '\x00' >> "${SHARED_DIR}/t4-archive"
@@ -209,7 +209,7 @@ else
     echo "  SKIP: no published cosign binary for ${host_os}/${host_arch}"
 fi
 
-note "5/8 wrong signer-workflow — fake workflow path must fail"
+note "5/9 wrong signer-workflow — fake workflow path must fail"
 if command -v gh >/dev/null 2>&1; then
     cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t5-archive"
     run_verify "${SHARED_DIR}/t5-archive" "overmindtech/cli" ".github/workflows/notreal.yml" default || rc=$?
@@ -220,7 +220,7 @@ else
     echo "  SKIP: gh not on PATH"
 fi
 
-note "6/8 wrong repo — verifying cli/cli archive as overmindtech/cli must fail"
+note "6/9 wrong repo — verifying cli/cli archive as overmindtech/cli must fail"
 if command -v gh >/dev/null 2>&1; then
     cp "${SHARED_DIR}/gh-archive" "${SHARED_DIR}/t6-archive"
     run_verify "${SHARED_DIR}/t6-archive" "overmindtech/cli" ".github/workflows/release.yml" default || rc=$?
@@ -231,7 +231,7 @@ else
     echo "  SKIP: gh not on PATH"
 fi
 
-note "7/8 missing attestation — random fixture has no attestation, must fail (cosign path)"
+note "7/9 missing attestation — random fixture has no attestation, must fail (cosign path)"
 if host_has_cosign; then
     cp "${SHARED_DIR}/random-fixture" "${SHARED_DIR}/t7-archive"
     run_verify "${SHARED_DIR}/t7-archive" "overmindtech/cli" ".github/workflows/release.yml" no-gh || rc=$?
@@ -242,7 +242,7 @@ else
     echo "  SKIP: no published cosign binary for ${host_os}/${host_arch}"
 fi
 
-note "8/8 GH_TOKEN rejected (401) — must fall back to unauth and still verify (cosign path)"
+note "8/9 GH_TOKEN rejected (401) — must fall back to unauth and still verify (cosign path)"
 # Reproduces the env0 runner case where a fine-grained PAT scoped only to the
 # customer's own repos is in the environment as GH_TOKEN. The attestations
 # endpoint returns 401 for the bad bearer; we must retry without auth.
@@ -259,6 +259,130 @@ if host_has_cosign; then
     set -e
     assert_rc 0 "${rc}" "bad GH_TOKEN falls back to unauth and verifies"
     unset rc
+else
+    echo "  SKIP: no published cosign binary for ${host_os}/${host_arch}"
+fi
+
+note "9/9 unauth rate-limit (403, X-RateLimit-Remaining=0) — must surface body and retry once (cosign path)"
+# Reproduces the customer-reported env0 failure: no GH_TOKEN set, env0's shared
+# egress IP has exhausted GitHub's 60/hour unauthenticated REST budget, and the
+# attestations endpoint returns HTTP 403 with rate-limit headers. The plugin
+# must (a) sleep up to X-RateLimit-Reset and retry once, and (b) succeed when
+# the retry returns 200.
+#
+# We install a curl wrapper on PATH that intercepts only attestations-API URLs
+# (cosign release downloads etc. pass through to the real curl binary). The
+# first intercepted call returns 403 with a 2-second X-RateLimit-Reset; the
+# second intercepted call returns a 200 plus the real attestation bundle we
+# pre-fetch once at setup. This exercises the full retry-then-verify path end
+# to end without consuming GitHub's real rate-limit budget on every retry.
+if host_has_cosign; then
+    REAL_CURL=$(command -v curl)
+    STUB_DIR=$(mktemp -d)
+    STUB_COUNTER="${STUB_DIR}/counter"
+    STUB_BUNDLE="${STUB_DIR}/bundle.json"
+    echo 0 > "${STUB_COUNTER}"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        OVM_DIGEST=$(sha256sum "${SHARED_DIR}/overmind-archive" | awk '{print $1}')
+    else
+        OVM_DIGEST=$(shasum -a 256 "${SHARED_DIR}/overmind-archive" | awk '{print $1}')
+    fi
+    "${REAL_CURL}" -fsSL \
+        -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/overmindtech/cli/attestations/sha256:${OVM_DIGEST}" \
+        -o "${STUB_BUNDLE}"
+
+    cat > "${STUB_DIR}/curl" <<EOF
+#!/bin/sh
+set -eu
+url=""
+for arg in "\$@"; do
+    case "\${arg}" in
+        http*|https*) url="\${arg}" ;;
+    esac
+done
+case "\${url}" in
+    *api.github.com/repos/*/attestations/*) ;;
+    *) exec "${REAL_CURL}" "\$@" ;;
+esac
+# From here on we know it's an attestations call; consume args to find -o/-D.
+output_file=""
+headers_file=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+        -o) shift; output_file="\$1"; shift ;;
+        -D) shift; headers_file="\$1"; shift ;;
+        -w) shift; shift ;;
+        -H) shift; shift ;;
+        -X) shift; shift ;;
+        --data-binary) shift; shift ;;
+        -*) shift ;;
+        *) shift ;;
+    esac
+done
+n=\$(cat "${STUB_COUNTER}")
+echo \$((n + 1)) > "${STUB_COUNTER}"
+if [ "\${n}" = "0" ]; then
+    reset=\$(( \$(date +%s) + 2 ))
+    if [ -n "\${headers_file}" ]; then
+        {
+            printf 'HTTP/2 403\\r\\n'
+            printf 'x-ratelimit-limit: 60\\r\\n'
+            printf 'x-ratelimit-remaining: 0\\r\\n'
+            printf 'x-ratelimit-reset: %d\\r\\n' "\${reset}"
+            printf 'content-type: application/json\\r\\n'
+            printf '\\r\\n'
+        } > "\${headers_file}"
+    fi
+    if [ -n "\${output_file}" ]; then
+        printf '%s' '{"message":"API rate limit exceeded for 1.2.3.4. (synthetic test response)","documentation_url":"https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting"}' > "\${output_file}"
+    fi
+    printf '403'
+    exit 0
+fi
+# Retry: serve the pre-fetched real bundle as a synthetic 200 response.
+reset=\$(( \$(date +%s) + 3600 ))
+if [ -n "\${headers_file}" ]; then
+    {
+        printf 'HTTP/2 200\\r\\n'
+        printf 'x-ratelimit-limit: 60\\r\\n'
+        printf 'x-ratelimit-remaining: 59\\r\\n'
+        printf 'x-ratelimit-reset: %d\\r\\n' "\${reset}"
+        printf 'content-type: application/json\\r\\n'
+        printf '\\r\\n'
+    } > "\${headers_file}"
+fi
+if [ -n "\${output_file}" ]; then
+    cat "${STUB_BUNDLE}" > "\${output_file}"
+fi
+printf '200'
+exit 0
+EOF
+    chmod +x "${STUB_DIR}/curl"
+
+    cp "${SHARED_DIR}/overmind-archive" "${SHARED_DIR}/t9-archive"
+    set +e
+    PATH="${STUB_DIR}:${NO_GH_PATH}" \
+        OS="${host_os}" \
+        ARCH="${host_arch}" \
+        env -u GH_TOKEN -u GITHUB_TOKEN \
+        sh -c '. "$1"; verify_attestation "$2" "$3" "$4"' \
+        _ "${EXTRACTED}" "${SHARED_DIR}/t9-archive" "overmindtech/cli" ".github/workflows/release.yml"
+    rc=$?
+    set -e
+    attempts=$(cat "${STUB_COUNTER}")
+    rm -rf "${STUB_DIR}"
+    assert_rc 0 "${rc}" "unauth rate-limit retry succeeds on second attempt"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "${attempts}" = "2" ]; then
+        pass "rate-limit stub was called exactly twice (1 fail + 1 retry)"
+    else
+        FAILED_NAMES="${FAILED_NAMES} rate-limit-stub-call-count"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        printf '  FAIL: rate-limit stub call count (expected 2, got %s)\n' "${attempts}"
+    fi
+    unset rc attempts
 else
     echo "  SKIP: no published cosign binary for ${host_os}/${host_arch}"
 fi

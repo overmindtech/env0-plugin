@@ -332,7 +332,20 @@ For verification to succeed, the env0 runner needs outbound HTTPS to:
 - `github.com` and `objects.githubusercontent.com` (release archive + cosign download)
 - `tuf-repo-cdn.sigstore.dev` and `rekor.sigstore.dev` (Sigstore trust root + transparency log)
 
-Setting `GH_TOKEN` (or `GITHUB_TOKEN`) raises GitHub API rate limits but is not required for verification of public-repo attestations.
+### Strongly recommended: set `GH_TOKEN` (or `GITHUB_TOKEN`) for rate limits
+
+The cosign fallback path fetches the attestation bundle from `https://api.github.com/repos/<owner>/<repo>/attestations/sha256:<digest>`. Unauthenticated requests to `api.github.com` are capped by GitHub at **60 requests per hour per IPv4** and env0's shared egress IPs commonly exhaust that budget — when they do, every supply-chain verification on the runner returns HTTP 403 (`API rate limit exceeded for <ip>...`) for up to an hour and the plugin refuses to install the unverified binary.
+
+Setting `GH_TOKEN` (or `GITHUB_TOKEN`) makes the plugin call the attestations endpoint authenticated, which raises the cap to **5,000 requests per hour per token**. This is enough headroom that rate-limit failures essentially disappear.
+
+**Token requirements (the absolute minimum):**
+
+- A **GitHub classic personal access token with NO scopes selected** is sufficient. The attestations endpoint is publicly readable; *all* the token has to do is identify the request as authenticated so the higher rate limit applies.
+- Cryptographic verification of the returned bundle (Fulcio cert + Rekor inclusion + signer-workflow identity) is the actual trust boundary, so the token does **not** need write access, repo access, or membership in `overmindtech/cli`.
+- If your team uses GitLab and nobody has a GitHub account, a single shared/bot GitHub account with one classic PAT (no scopes) works for the whole org — the token is only used to authenticate API calls during verification, not to read or write any specific repository.
+- Fine-grained PATs scoped exclusively to your own repos will return 401/403 on `overmindtech/cli`'s attestations; the plugin then falls back to the unauthenticated path (and the same 60/hour cap) and prints a warning. Prefer a classic PAT with no scopes to avoid this fallback.
+
+The token can be exposed to the plugin via either `GH_TOKEN` or `GITHUB_TOKEN`; the plugin checks `GH_TOKEN` first and falls back to `GITHUB_TOKEN`. Store it as an env0 environment variable / secret in the same place you'd store `OVERMIND_API_KEY`.
 
 ### Failure mode
 
@@ -340,9 +353,10 @@ A verification failure causes the plugin to exit non-zero with a clear error mes
 
 If you see a verification failure on a clean runner, the most common causes are:
 
-1. The runner cannot reach the Sigstore endpoints listed above.
-2. A new Overmind CLI release has been published without attestations (regression on the producer side — please file an issue).
-3. The cosign SHA-256 pin in the plugin is stale relative to the cosign version it tries to download (Renovate is responsible for keeping these in sync; manual fix is `sh scripts/update-cosign-pins.sh` after bumping `COSIGN_VERSION`).
+1. **GitHub API rate limit (HTTP 403 with `API rate limit exceeded for ...`)** — by far the most common failure on env0. Fix: set `GH_TOKEN` or `GITHUB_TOKEN` per the section above. The plugin will automatically retry once on rate-limited responses while it waits for `X-RateLimit-Reset` (capped at 60 s), but a token is the durable fix.
+2. The runner cannot reach the Sigstore endpoints listed above.
+3. A new Overmind CLI release has been published without attestations (regression on the producer side — please file an issue).
+4. The cosign SHA-256 pin in the plugin is stale relative to the cosign version it tries to download (Renovate is responsible for keeping these in sync; manual fix is `sh scripts/update-cosign-pins.sh` after bumping `COSIGN_VERSION`).
 
 ## Requirements
 
